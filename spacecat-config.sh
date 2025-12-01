@@ -10,7 +10,7 @@ export SPACECAT_SCRAPER_DIR="/Users/jsanchez/Documents/GitHub/SPACECAT/spacecat-
 export SPACECAT_AUDIT_WORKER_DIR="/Users/jsanchez/Documents/GitHub/SPACECAT/spacecat-audit-worker"
 
 # Path to my-workspace-tools directory (where these scripts live)
-export SPACECAT_TOOLS_DIR="/Users/jsanchez/Documents/my-workspace-tools"
+export SPACECAT_TOOLS_DIR="/Users/jsanchez/Documents/GitHub/SPACECAT/my-workspace-tools"
 
 # Path to scraper's tmp folder (used by audit worker's mock S3 client)
 export SPACECAT_SCRAPER_TMP_DIR="$SPACECAT_SCRAPER_DIR/tmp"

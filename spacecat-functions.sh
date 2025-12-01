@@ -159,6 +159,11 @@ Or:
   1. spacecat-load-perms
   2. spacecat-quick          # Build + run
 
+File Sync:
+  - Files auto-sync FROM central repo when you run scripts
+  - When you save changes, they sync BACK to central repo automatically
+  - No manual syncing needed!
+
 Credentials persist for your entire terminal session!
 
 EOF

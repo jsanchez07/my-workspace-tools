@@ -35,6 +35,20 @@ source "$CONFIG_FILE"
 SCRAPER_DIR="$SPACECAT_SCRAPER_DIR"
 URL_FILE="$SPACECAT_TOOLS_DIR/urls-to-scrape.txt"
 
+# ============================================================================
+# SYNC: Copy master local.js from central repo to scraper
+# ============================================================================
+echo "🔄 Syncing local.js from central repo..."
+if [ -f "$SPACECAT_TOOLS_DIR/local.js" ]; then
+    cp "$SPACECAT_TOOLS_DIR/local.js" "$SCRAPER_DIR/local.js"
+    echo "✅ Synced latest local.js from my-workspace-tools"
+    echo ""
+else
+    echo "⚠️  Warning: $SPACECAT_TOOLS_DIR/local.js not found"
+    echo "   Using existing file in scraper"
+    echo ""
+fi
+
 if [ ! -d "$SCRAPER_DIR" ]; then
     echo "Error: Scraper directory not found at $SCRAPER_DIR"
     exit 1
@@ -242,38 +256,46 @@ console.log('✅ Removed executablePath line from abstract-handler.js - will use
         echo "✅ Restored abstract-handler.js"
     fi
     
-    # Restore original URLs (keep SITE_ID changes if made)
+    # Handle SITE_ID changes and sync back to central repo
     if [ -n "$NEW_SITE_ID" ]; then
         echo ""
         echo "Note: SITE_ID was changed to: $NEW_SITE_ID"
-        read -p "Keep the new SITE_ID? (Y/n): " KEEP_SITE_ID
+        read -p "Save new SITE_ID to central repo (my-workspace-tools)? (Y/n): " KEEP_SITE_ID
         if [[ "$KEEP_SITE_ID" =~ ^[Nn] ]]; then
-            # Restore everything (old SITE_ID + old URLs)
-            mv local.js.bak local.js
-            echo "🔄 Restored original local.js (reverted to old SITE_ID)"
+            echo "🔄 SITE_ID change discarded"
         else
-            # Keep new SITE_ID but restore old URLs
-            # Read the old URLs from backup and update current file
+            # Copy the SITE_ID change BACK to central repo
+            # Extract just the SITE_ID from current local.js and update central repo
+            echo "💾 Saving SITE_ID to central repo..."
             node -e "
 const fs = require('fs');
-const backup = fs.readFileSync('local.js.bak', 'utf8');
 const current = fs.readFileSync('local.js', 'utf8');
+const central = fs.readFileSync('$SPACECAT_TOOLS_DIR/local.js', 'utf8');
 
-// Extract urlsData from backup
-const urlsMatch = backup.match(/const urlsData = \[[\s\S]*?\];/m);
-if (urlsMatch) {
-  const newContent = current.replace(/const urlsData = \[[\s\S]*?\];/m, urlsMatch[0]);
-  fs.writeFileSync('local.js', newContent);
+// Extract SITE_ID from current
+const siteIdMatch = current.match(/const SITE_ID = '[^']+'/);
+if (siteIdMatch) {
+  // Update central repo's SITE_ID
+  const newCentral = central.replace(/const SITE_ID = '[^']+'/, siteIdMatch[0]);
+  fs.writeFileSync('$SPACECAT_TOOLS_DIR/local.js', newCentral);
 }
 "
-            rm local.js.bak
-            echo "💾 Kept new SITE_ID, restored original URLs"
+            echo "✅ Synced SITE_ID → my-workspace-tools/local.js"
+            echo ""
+            echo "💡 Don't forget to commit in my-workspace-tools if you want to share:"
+            echo "   cd $SPACECAT_TOOLS_DIR"
+            echo "   git add local.js"
+            echo "   git commit -m 'Update scraper SITE_ID'"
         fi
     else
-        # No SITE_ID change, just restore URLs
-        mv local.js.bak local.js
         echo ""
-        echo "🔄 Restored original URLs"
+        echo "ℹ️  No SITE_ID changes to save"
+    fi
+    
+    # Always restore original in scraper (will be synced from central next run)
+    if [ -f "local.js.bak" ]; then
+        mv local.js.bak local.js
+        echo "✅ Restored original local.js"
     fi
 else
     echo "❌ Error updating local.js"
@@ -292,7 +314,8 @@ echo "Run this command to analyze the scraped data:"
 echo "  ./run-audit-worker.sh"
 echo ""
 echo "Make sure to:"
-echo "  - Set USE_LOCAL_SCRAPER_DATA: true"
+echo "  - Select audit type: meta-tags (or other audit that uses scraper data)"
+echo "  - Select: true (use local scraper data)"
 echo "  - Use the same SITE_ID: $CURRENT_SITE_ID"
 echo ""
 

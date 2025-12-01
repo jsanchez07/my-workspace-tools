@@ -43,6 +43,20 @@ source "$CONFIG_FILE"
 AUDIT_WORKER_DIR="$SPACECAT_AUDIT_WORKER_DIR"
 INDEX_LOCAL_FILE="$AUDIT_WORKER_DIR/src/index-local.js"
 
+# ============================================================================
+# SYNC: Copy master index-local.js from central repo to audit worker
+# ============================================================================
+echo "🔄 Syncing index-local.js from central repo..."
+if [ -f "$SPACECAT_TOOLS_DIR/index-local.js" ]; then
+    cp "$SPACECAT_TOOLS_DIR/index-local.js" "$INDEX_LOCAL_FILE"
+    echo "✅ Synced latest index-local.js from my-workspace-tools"
+    echo ""
+else
+    echo "⚠️  Warning: $SPACECAT_TOOLS_DIR/index-local.js not found"
+    echo "   Using existing file in audit worker"
+    echo ""
+fi
+
 if [ ! -d "$AUDIT_WORKER_DIR" ]; then
     echo "Error: Audit worker directory not found at $AUDIT_WORKER_DIR"
     exit 1
@@ -1031,23 +1045,32 @@ fi
 
 echo "✅ Cleaned up temporary files"
 
-# Handle index-local.js backup
+# Handle index-local.js backup and sync back to central repo
 echo ""
 if [ "$NEW_USE_LOCAL" != "$CURRENT_USE_LOCAL" ] || [ "$NEW_AUDIT_TYPE" != "$CURRENT_AUDIT_TYPE" ] || [ "$NEW_SITE_ID" != "$CURRENT_SITE_ID" ]; then
     # Values changed - ask what to do
-    read -p "Keep the changes to index-local.js? (Y/n): " KEEP_CHANGES
+    read -p "Save changes to central repo (my-workspace-tools)? (Y/n): " KEEP_CHANGES
     if [[ "$KEEP_CHANGES" =~ ^[Nn] ]]; then
-        mv src/index-local.js.bak src/index-local.js
-        echo "🔄 Restored original index-local.js"
+        echo "🔄 Changes discarded"
     else
-        rm src/index-local.js.bak
-        echo "💾 Kept changes to index-local.js"
+        # Copy changes BACK to central repo
+        echo "💾 Saving changes to central repo..."
+        cp src/index-local.js "$SPACECAT_TOOLS_DIR/index-local.js"
+        echo "✅ Synced index-local.js → my-workspace-tools/"
+        echo ""
+        echo "💡 Don't forget to commit in my-workspace-tools if you want to share:"
+        echo "   cd $SPACECAT_TOOLS_DIR"
+        echo "   git add index-local.js"
+        echo "   git commit -m 'Update audit worker config'"
     fi
 else
-    # No value changes, but the file might have structural updates (mock code, etc.)
-    # Keep the backup but don't auto-restore to preserve local testing enhancements
-    rm src/index-local.js.bak
-    echo "💾 Kept index-local.js (no value changes, but local testing code preserved)"
+    # No value changes
+    echo "ℹ️  No configuration changes to save"
+fi
+
+# Always restore original in audit worker (will be synced from central next run)
+if [ -f "src/index-local.js.bak" ]; then
+    mv src/index-local.js.bak src/index-local.js
 fi
 
 echo ""
