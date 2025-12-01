@@ -1,0 +1,298 @@
+#!/bin/bash
+
+# Cleanup function to restore files if script exits early
+cleanup_on_exit() {
+    cd "$SCRAPER_DIR" 2>/dev/null || return
+    
+    # Restore abstract-handler.js if it was patched
+    if [ -f "src/handlers/abstract-handler.js.backup" ]; then
+        echo ""
+        echo "🔄 Restoring abstract-handler.js (cleanup)..."
+        mv src/handlers/abstract-handler.js.backup src/handlers/abstract-handler.js
+        echo "✅ abstract-handler.js restored"
+    fi
+}
+
+# Set trap to cleanup on exit (Ctrl+C, error, or normal exit)
+trap cleanup_on_exit EXIT INT TERM
+
+# Load configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/spacecat-config.sh"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "❌ Error: Configuration file not found!"
+    echo ""
+    echo "Please run setup first:"
+    echo "  cd $SCRIPT_DIR"
+    echo "  ./setup-spacecat-tools.sh"
+    echo ""
+    exit 1
+fi
+
+source "$CONFIG_FILE"
+
+SCRAPER_DIR="$SPACECAT_SCRAPER_DIR"
+URL_FILE="$SPACECAT_TOOLS_DIR/urls-to-scrape.txt"
+
+if [ ! -d "$SCRAPER_DIR" ]; then
+    echo "Error: Scraper directory not found at $SCRAPER_DIR"
+    exit 1
+fi
+
+# Read URLs from file if no arguments provided
+if [ $# -eq 0 ]; then
+    if [ ! -f "$URL_FILE" ]; then
+        echo "Error: No URLs provided and $URL_FILE not found"
+        echo ""
+        echo "Usage:"
+        echo "  1. Edit urls-to-scrape.txt and add URLs (one per line)"
+        echo "     Then run: $0"
+        echo ""
+        echo "  2. Or pass URLs as arguments:"
+        echo "     $0 https://example.com https://example.com/page2"
+        exit 1
+    fi
+    
+    echo "Reading URLs from: $URL_FILE"
+    # Read URLs from file, skip empty lines and comments (works in bash and zsh)
+    urls=()
+    while IFS= read -r line; do
+        # Skip comments and empty lines
+        if [[ ! "$line" =~ ^# ]] && [[ -n "$line" ]]; then
+            urls+=("$line")
+        fi
+    done < "$URL_FILE"
+    
+    if [ ${#urls[@]} -eq 0 ]; then
+        echo "Error: No URLs found in $URL_FILE"
+        echo "Add URLs (one per line) to the file and try again."
+        exit 1
+    fi
+    
+    set -- "${urls[@]}"  # Set positional parameters to the URLs from file
+    echo "Found ${#urls[@]} URL(s) in file"
+fi
+
+# Extract current SITE_ID from local.js
+cd "$SCRAPER_DIR" || exit 1
+
+CURRENT_SITE_ID=$(grep -E "const SITE_ID = '[^']+'" local.js | sed -E "s/.*const SITE_ID = '([^']+)'.*/\1/")
+
+if [ -z "$CURRENT_SITE_ID" ]; then
+    echo "⚠️  Could not find SITE_ID in local.js"
+    CURRENT_SITE_ID="<not found>"
+fi
+
+echo ""
+echo "╔════════════════════════════════════════════════════════════╗"
+echo "║              CURRENT SITE_ID CONFIGURATION                 ║"
+echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+echo "Current SITE_ID: $CURRENT_SITE_ID"
+echo ""
+echo "Options:"
+echo "  1. Press ENTER to use current SITE_ID"
+echo "  2. Paste a new SITE_ID to change it"
+echo ""
+read -p "Enter new SITE_ID (or press ENTER to keep current): " NEW_SITE_ID
+
+if [ -n "$NEW_SITE_ID" ]; then
+    echo ""
+    echo "🔄 Updating SITE_ID to: $NEW_SITE_ID"
+    # Update SITE_ID in local.js using sed
+    sed -i.bak "s/const SITE_ID = '[^']*'/const SITE_ID = '$NEW_SITE_ID'/" local.js
+    echo "✅ SITE_ID updated!"
+    CURRENT_SITE_ID="$NEW_SITE_ID"
+else
+    echo ""
+    echo "✅ Using current SITE_ID: $CURRENT_SITE_ID"
+fi
+
+echo ""
+echo "═══════════════════════════════════════════════════════════════"
+echo ""
+
+# Show existing sites in tmp/scrapes
+if [ -d "tmp/scrapes" ]; then
+    EXISTING_SITES=$(ls -1 tmp/scrapes 2>/dev/null | wc -l | xargs)
+    if [ "$EXISTING_SITES" -gt 0 ]; then
+        echo "📁 Found existing scrape data for $EXISTING_SITES site(s):"
+        ls -1 tmp/scrapes | while read site; do
+            echo "   • $site"
+        done
+        echo ""
+    fi
+fi
+
+# Check if this specific site already has scrape data
+SITE_SCRAPE_DIR="tmp/scrapes/$CURRENT_SITE_ID"
+if [ -d "$SITE_SCRAPE_DIR" ]; then
+    echo "🗑️  Found existing scrape data for this site: $CURRENT_SITE_ID"
+    echo ""
+    echo "Options:"
+    echo "  1. Delete and start fresh"
+    echo "  2. Keep existing and add to it (or overwrite duplicates)"
+    echo "  3. Cancel (don't run scraper)"
+    echo ""
+    read -p "Choose [1/2/3]: " SCRAPE_CHOICE
+    
+    case "$SCRAPE_CHOICE" in
+        1)
+            echo "Deleting scrape data for $CURRENT_SITE_ID..."
+            rm -rf "$SITE_SCRAPE_DIR"
+            echo "✅ Cleaned up old scrapes for this site"
+            ;;
+        2)
+            echo "⚠️  Keeping existing scrapes (will add new URLs or overwrite duplicates)"
+            ;;
+        3)
+            echo "Cancelled. Not running scraper."
+            exit 0
+            ;;
+        *)
+            echo "Invalid choice. Cancelled."
+            exit 1
+            ;;
+    esac
+    echo ""
+else
+    echo "✅ No existing scrape data for this site"
+    echo ""
+fi
+
+echo "Updating local.js with $# URL(s)..."
+
+# Backup original local.js (if not already backed up from SITE_ID change)
+if [ ! -f "local.js.bak" ]; then
+    cp local.js local.js.bak
+fi
+
+# Use Node.js to safely update the file (handles all special characters)
+node -e "
+const fs = require('fs');
+const urls = process.argv.slice(1);
+const content = fs.readFileSync('local.js', 'utf8');
+
+// Build the URL array
+const urlArray = urls.map(url => \`    { url: '\${url}' }\`).join(',\\n');
+
+// Replace the urlsData array
+const newContent = content.replace(
+  /const urlsData = \[[\s\S]*?\];/m,
+  \`const urlsData = [\\n\${urlArray}\\n  ];\`
+);
+
+fs.writeFileSync('local.js', newContent);
+" "$@"
+
+if [ $? -eq 0 ]; then
+    echo "✅ Updated local.js with URLs"
+    echo ""
+    
+    # Patch abstract-handler.js to remove executablePath for local testing
+    # This is the base class used by DefaultHandler and most other handlers
+    echo "🔧 Patching abstract-handler.js for local testing..."
+    
+    # Backup the original file
+    cp src/handlers/abstract-handler.js src/handlers/abstract-handler.js.backup
+    
+    # Remove the executablePath line from the isLocal options block
+    node -e "
+const fs = require('fs');
+let content = fs.readFileSync('src/handlers/abstract-handler.js', 'utf8');
+
+// Remove the executablePath line from the isLocal options block
+// Pattern: executablePath: '/opt/homebrew/bin/chromium', (with possible whitespace)
+content = content.replace(
+  /(\s*)executablePath:\s*'\/opt\/homebrew\/bin\/chromium',?\s*\n/g,
+  ''
+);
+
+fs.writeFileSync('src/handlers/abstract-handler.js', content);
+console.log('✅ Removed executablePath line from abstract-handler.js - will use Puppeteer bundled Chromium');
+"
+    
+    if [ $? -ne 0 ]; then
+        echo "❌ Error patching abstract-handler.js"
+        mv src/handlers/abstract-handler.js.backup src/handlers/abstract-handler.js
+        exit 1
+    fi
+    echo ""
+    
+    echo "Running scraper..."
+    echo "=================="
+    
+    # Run the scraper (tmp cleanup handled earlier based on user choice)
+    node local.js
+    
+    echo ""
+    echo "=================="
+    echo "✅ Scraping complete!"
+    echo ""
+    echo "Results saved in:"
+    find tmp -name "scrape.json" -type f | while read file; do
+        echo "  📄 $file"
+    done
+    
+    # Restore abstract-handler.js
+    if [ -f "src/handlers/abstract-handler.js.backup" ]; then
+        mv src/handlers/abstract-handler.js.backup src/handlers/abstract-handler.js
+        echo ""
+        echo "✅ Restored abstract-handler.js"
+    fi
+    
+    # Restore original URLs (keep SITE_ID changes if made)
+    if [ -n "$NEW_SITE_ID" ]; then
+        echo ""
+        echo "Note: SITE_ID was changed to: $NEW_SITE_ID"
+        read -p "Keep the new SITE_ID? (Y/n): " KEEP_SITE_ID
+        if [[ "$KEEP_SITE_ID" =~ ^[Nn] ]]; then
+            # Restore everything (old SITE_ID + old URLs)
+            mv local.js.bak local.js
+            echo "🔄 Restored original local.js (reverted to old SITE_ID)"
+        else
+            # Keep new SITE_ID but restore old URLs
+            # Read the old URLs from backup and update current file
+            node -e "
+const fs = require('fs');
+const backup = fs.readFileSync('local.js.bak', 'utf8');
+const current = fs.readFileSync('local.js', 'utf8');
+
+// Extract urlsData from backup
+const urlsMatch = backup.match(/const urlsData = \[[\s\S]*?\];/m);
+if (urlsMatch) {
+  const newContent = current.replace(/const urlsData = \[[\s\S]*?\];/m, urlsMatch[0]);
+  fs.writeFileSync('local.js', newContent);
+}
+"
+            rm local.js.bak
+            echo "💾 Kept new SITE_ID, restored original URLs"
+        fi
+    else
+        # No SITE_ID change, just restore URLs
+        mv local.js.bak local.js
+        echo ""
+        echo "🔄 Restored original URLs"
+    fi
+else
+    echo "❌ Error updating local.js"
+    mv local.js.bak local.js
+    exit 1
+fi
+
+echo ""
+echo "═══════════════════════════════════════════════════════════════"
+echo ""
+echo "✅ Scraping complete! 🎉"
+echo ""
+echo "📋 Next step: Run the audit worker"
+echo ""
+echo "Run this command to analyze the scraped data:"
+echo "  ./run-audit-worker.sh"
+echo ""
+echo "Make sure to:"
+echo "  - Set USE_LOCAL_SCRAPER_DATA: true"
+echo "  - Use the same SITE_ID: $CURRENT_SITE_ID"
+echo ""
+
