@@ -1045,12 +1045,16 @@ echo ""
 
 # Run SAM using the BUILT template (not source template)
 # This ensures env vars from env.json are properly applied
-# Filter out X-Ray errors at the shell level (only way to suppress them)
+# Filter ONLY X-Ray specific errors/stack traces - be conservative to avoid hiding real errors
+# Only filter lines that contain X-Ray-specific patterns
 sam local invoke \
   --template .aws-sam/build/template.yaml \
   SpacecatAuditWorkerFunction \
   --env-vars "$AUDIT_WORKER_DIR/env.json" \
-  2>&1 | grep -v "Missing AWS Lambda trace data for X-Ray" | tee output.txt
+  2>&1 | grep -v -E "(Missing AWS Lambda trace data for X-Ray|aws-xray-sdk-core|contextMissingLogError|resolveLambdaTraceData|resolveSegment)" > output.txt
+
+echo ""
+echo "✅ Audit completed! Output saved to output.txt"
 
 echo ""
 echo "=================="
