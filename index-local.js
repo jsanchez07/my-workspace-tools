@@ -19,10 +19,29 @@ import { main as universalMain } from './index.js';
 // ============================================================================
 // SUPPRESS X-RAY TRACING ERRORS IN LOCAL MODE
 // ============================================================================
-// AWS X-Ray is not available locally, so we suppress the errors
-// See: https://docs.aws.amazon.com/xray/latest/devguide/xray-sdk-nodejs-configuration.html
+// AWS X-Ray is not available locally, so we disable it entirely
+// This prevents X-Ray SDK from auto-instrumenting AWS SDK and other libraries
 process.env.AWS_XRAY_CONTEXT_MISSING = 'IGNORE_ERROR';
-console.log('🔧 [LOCAL TEST MODE] X-Ray context missing errors suppressed');
+process.env.AWS_XRAY_SDK_ENABLED = 'false';
+process.env._X_AMZN_TRACE_ID = '';
+
+// Monkey-patch console.error to filter out X-Ray noise
+const originalConsoleError = console.error;
+console.error = (...args) => {
+  // Filter out X-Ray trace data errors
+  const message = args[0]?.message || args[0] || '';
+  if (typeof message === 'string' && message.includes('Missing AWS Lambda trace data for X-Ray')) {
+    return; // Silently ignore X-Ray errors
+  }
+  // Also check if it's an Error object with X-Ray message
+  if (args[0] instanceof Error && args[0].message?.includes('Missing AWS Lambda trace data for X-Ray')) {
+    return; // Silently ignore X-Ray errors
+  }
+  // Pass through all other errors
+  originalConsoleError.apply(console, args);
+};
+
+console.log('🔧 [LOCAL TEST MODE] X-Ray tracing disabled and error logging filtered');
 
 // ============================================================================
 // LOCAL TESTING CONFIGURATION
