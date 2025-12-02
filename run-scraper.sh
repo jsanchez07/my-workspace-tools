@@ -32,6 +32,9 @@ fi
 
 source "$CONFIG_FILE"
 
+# Source config helpers for last-run tracking
+source "$SCRIPT_DIR/config-helpers.sh"
+
 SCRAPER_DIR="$SPACECAT_SCRAPER_DIR"
 URL_FILE="$SPACECAT_TOOLS_DIR/urls-to-scrape.txt"
 
@@ -48,6 +51,9 @@ else
     echo "   Using existing file in scraper"
     echo ""
 fi
+
+# Read last run SITE_ID
+LAST_SITE_ID=$(read_config "scraper.lastSiteId")
 
 if [ ! -d "$SCRAPER_DIR" ]; then
     echo "Error: Scraper directory not found at $SCRAPER_DIR"
@@ -100,16 +106,25 @@ fi
 
 echo ""
 echo "╔════════════════════════════════════════════════════════════╗"
-echo "║              CURRENT SITE_ID CONFIGURATION                 ║"
+echo "║              SITE_ID CONFIGURATION                         ║"
 echo "╚════════════════════════════════════════════════════════════╝"
 echo ""
-echo "Current SITE_ID: $CURRENT_SITE_ID"
+if [ -n "$LAST_SITE_ID" ]; then
+    echo "Last used SITE_ID: $LAST_SITE_ID"
+    echo "Current in local.js: $CURRENT_SITE_ID"
+else
+    echo "Current SITE_ID: $CURRENT_SITE_ID"
+fi
 echo ""
 echo "Options:"
-echo "  1. Press ENTER to use current SITE_ID"
+echo "  1. Press ENTER to use last SITE_ID"
 echo "  2. Paste a new SITE_ID to change it"
 echo ""
-read -p "Enter new SITE_ID (or press ENTER to keep current): " NEW_SITE_ID
+if [ -n "$LAST_SITE_ID" ]; then
+    read -p "Enter SITE_ID [last: $LAST_SITE_ID]: " NEW_SITE_ID
+else
+    read -p "Enter SITE_ID [current: $CURRENT_SITE_ID]: " NEW_SITE_ID
+fi
 
 if [ -n "$NEW_SITE_ID" ]; then
     echo ""
@@ -119,8 +134,16 @@ if [ -n "$NEW_SITE_ID" ]; then
     echo "✅ SITE_ID updated!"
     CURRENT_SITE_ID="$NEW_SITE_ID"
 else
-    echo ""
-    echo "✅ Using current SITE_ID: $CURRENT_SITE_ID"
+    if [ -n "$LAST_SITE_ID" ]; then
+        echo ""
+        echo "✅ Using last SITE_ID: $LAST_SITE_ID"
+        # Update local.js with last SITE_ID
+        sed -i.bak "s/const SITE_ID = '[^']*'/const SITE_ID = '$LAST_SITE_ID'/" local.js
+        CURRENT_SITE_ID="$LAST_SITE_ID"
+    else
+        echo ""
+        echo "✅ Using current SITE_ID: $CURRENT_SITE_ID"
+    fi
 fi
 
 echo ""
@@ -256,43 +279,15 @@ console.log('✅ Removed executablePath line from abstract-handler.js - will use
         echo "✅ Restored abstract-handler.js"
     fi
     
-    # Handle SITE_ID changes and sync back to central repo
-    if [ -n "$NEW_SITE_ID" ]; then
-        echo ""
-        echo "Note: SITE_ID was changed to: $NEW_SITE_ID"
-        read -p "Save new SITE_ID to central repo (my-workspace-tools)? (Y/n): " KEEP_SITE_ID
-        if [[ "$KEEP_SITE_ID" =~ ^[Nn] ]]; then
-            echo "🔄 SITE_ID change discarded"
-        else
-            # Copy the SITE_ID change BACK to central repo
-            # Extract just the SITE_ID from current local.js and update central repo
-            echo "💾 Saving SITE_ID to central repo..."
-            node -e "
-const fs = require('fs');
-const current = fs.readFileSync('local.js', 'utf8');
-const central = fs.readFileSync('$SPACECAT_TOOLS_DIR/local.js', 'utf8');
-
-// Extract SITE_ID from current
-const siteIdMatch = current.match(/const SITE_ID = '[^']+'/);
-if (siteIdMatch) {
-  // Update central repo's SITE_ID
-  const newCentral = central.replace(/const SITE_ID = '[^']+'/, siteIdMatch[0]);
-  fs.writeFileSync('$SPACECAT_TOOLS_DIR/local.js', newCentral);
-}
-"
-            echo "✅ Synced SITE_ID → my-workspace-tools/local.js"
-            echo ""
-            echo "💡 Don't forget to commit in my-workspace-tools if you want to share:"
-            echo "   cd $SPACECAT_TOOLS_DIR"
-            echo "   git add local.js"
-            echo "   git commit -m 'Update scraper SITE_ID'"
-        fi
-    else
-        echo ""
-        echo "ℹ️  No SITE_ID changes to save"
-    fi
+    # Save SITE_ID to last-run config (for next time)
+    echo ""
+    echo "💾 Saving your SITE_ID for next run..."
+    cd "$SCRIPT_DIR"
+    write_config "scraper.lastSiteId" "$CURRENT_SITE_ID"
+    echo "✅ SITE_ID saved to .last-run-config.json"
     
     # Always restore original in scraper (will be synced from central next run)
+    cd "$SCRAPER_DIR"
     if [ -f "local.js.bak" ]; then
         mv local.js.bak local.js
         echo "✅ Restored original local.js"
@@ -308,6 +303,8 @@ echo "════════════════════════�
 echo ""
 echo "✅ Scraping complete! 🎉"
 echo ""
+echo "💡 Your SITE_ID is remembered for next run - audit worker will use the same!"
+echo ""
 echo "📋 Next step: Run the audit worker"
 echo ""
 echo "Run this command to analyze the scraped data:"
@@ -316,6 +313,6 @@ echo ""
 echo "Make sure to:"
 echo "  - Select audit type: meta-tags (or other audit that uses scraper data)"
 echo "  - Select: true (use local scraper data)"
-echo "  - Use the same SITE_ID: $CURRENT_SITE_ID"
+echo "  - SITE_ID will default to: $CURRENT_SITE_ID (just press ENTER)"
 echo ""
 

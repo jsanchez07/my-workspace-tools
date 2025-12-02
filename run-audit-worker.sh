@@ -40,6 +40,9 @@ fi
 
 source "$CONFIG_FILE"
 
+# Source config helpers for last-run tracking
+source "$SCRIPT_DIR/config-helpers.sh"
+
 AUDIT_WORKER_DIR="$SPACECAT_AUDIT_WORKER_DIR"
 INDEX_LOCAL_FILE="$AUDIT_WORKER_DIR/src/index-local.js"
 
@@ -56,6 +59,11 @@ else
     echo "   Using existing file in audit worker"
     echo ""
 fi
+
+# Read last run values
+LAST_AUDIT_TYPE=$(read_config "audit.lastAuditType")
+LAST_SITE_ID=$(read_config "audit.lastSiteId")
+LAST_USE_LOCAL=$(read_config "audit.lastUseLocalData")
 
 if [ ! -d "$AUDIT_WORKER_DIR" ]; then
     echo "Error: Audit worker directory not found at $AUDIT_WORKER_DIR"
@@ -164,9 +172,16 @@ echo "  • broken-internal-links   • canonical          • hreflang"
 echo "  • meta-tags              • redirect-chains    • sitemap"
 echo "  • structured-data        • missing-structured-data"
 echo ""
-read -p "Audit type [current: $CURRENT_AUDIT_TYPE]: " NEW_AUDIT_TYPE
-if [ -z "$NEW_AUDIT_TYPE" ]; then
-    NEW_AUDIT_TYPE="$CURRENT_AUDIT_TYPE"
+if [ -n "$LAST_AUDIT_TYPE" ]; then
+    read -p "Audit type [last: $LAST_AUDIT_TYPE]: " NEW_AUDIT_TYPE
+    if [ -z "$NEW_AUDIT_TYPE" ]; then
+        NEW_AUDIT_TYPE="$LAST_AUDIT_TYPE"
+    fi
+else
+    read -p "Audit type [current: $CURRENT_AUDIT_TYPE]: " NEW_AUDIT_TYPE
+    if [ -z "$NEW_AUDIT_TYPE" ]; then
+        NEW_AUDIT_TYPE="$CURRENT_AUDIT_TYPE"
+    fi
 fi
 
 # Check if audit requires network access when using local scraper data
@@ -342,17 +357,30 @@ if [ "$NEW_USE_LOCAL" = "true" ]; then
         echo "💡 Scraper's SITE_ID: $SCRAPER_SITE_ID"
         echo "   (Must match when using local scraper data!)"
         echo ""
-        read -p "Site ID [press ENTER to use scraper's: $SCRAPER_SITE_ID]: " NEW_SITE_ID
-        if [ -z "$NEW_SITE_ID" ]; then
-            # Default to scraper's SITE_ID when using local data
-            NEW_SITE_ID="$SCRAPER_SITE_ID"
-            echo "   → Using scraper's SITE_ID"
+        if [ -n "$LAST_SITE_ID" ]; then
+            read -p "Site ID [last: $LAST_SITE_ID]: " NEW_SITE_ID
+            if [ -z "$NEW_SITE_ID" ]; then
+                NEW_SITE_ID="$LAST_SITE_ID"
+            fi
+        else
+            read -p "Site ID [press ENTER to use scraper's: $SCRAPER_SITE_ID]: " NEW_SITE_ID
+            if [ -z "$NEW_SITE_ID" ]; then
+                NEW_SITE_ID="$SCRAPER_SITE_ID"
+                echo "   → Using scraper's SITE_ID"
+            fi
         fi
     else
         echo "⚠️  Could not detect scraper's SITE_ID from local.js"
-        read -p "Site ID [current: $CURRENT_SITE_ID]: " NEW_SITE_ID
-        if [ -z "$NEW_SITE_ID" ]; then
-            NEW_SITE_ID="$CURRENT_SITE_ID"
+        if [ -n "$LAST_SITE_ID" ]; then
+            read -p "Site ID [last: $LAST_SITE_ID]: " NEW_SITE_ID
+            if [ -z "$NEW_SITE_ID" ]; then
+                NEW_SITE_ID="$LAST_SITE_ID"
+            fi
+        else
+            read -p "Site ID [current: $CURRENT_SITE_ID]: " NEW_SITE_ID
+            if [ -z "$NEW_SITE_ID" ]; then
+                NEW_SITE_ID="$CURRENT_SITE_ID"
+            fi
         fi
     fi
 else
@@ -362,9 +390,16 @@ else
         echo "   (But FYI, scraper currently has: $SCRAPER_SITE_ID)"
     fi
     echo ""
-    read -p "Site ID [current: $CURRENT_SITE_ID]: " NEW_SITE_ID
-    if [ -z "$NEW_SITE_ID" ]; then
-        NEW_SITE_ID="$CURRENT_SITE_ID"
+    if [ -n "$LAST_SITE_ID" ]; then
+        read -p "Site ID [last: $LAST_SITE_ID]: " NEW_SITE_ID
+        if [ -z "$NEW_SITE_ID" ]; then
+            NEW_SITE_ID="$LAST_SITE_ID"
+        fi
+    else
+        read -p "Site ID [current: $CURRENT_SITE_ID]: " NEW_SITE_ID
+        if [ -z "$NEW_SITE_ID" ]; then
+            NEW_SITE_ID="$CURRENT_SITE_ID"
+        fi
     fi
 fi
 
@@ -1045,34 +1080,23 @@ fi
 
 echo "✅ Cleaned up temporary files"
 
-# Handle index-local.js backup and sync back to central repo
+# Save settings to last-run config (for next time)
 echo ""
-if [ "$NEW_USE_LOCAL" != "$CURRENT_USE_LOCAL" ] || [ "$NEW_AUDIT_TYPE" != "$CURRENT_AUDIT_TYPE" ] || [ "$NEW_SITE_ID" != "$CURRENT_SITE_ID" ]; then
-    # Values changed - ask what to do
-    read -p "Save changes to central repo (my-workspace-tools)? (Y/n): " KEEP_CHANGES
-    if [[ "$KEEP_CHANGES" =~ ^[Nn] ]]; then
-        echo "🔄 Changes discarded"
-    else
-        # Copy changes BACK to central repo
-        echo "💾 Saving changes to central repo..."
-        cp src/index-local.js "$SPACECAT_TOOLS_DIR/index-local.js"
-        echo "✅ Synced index-local.js → my-workspace-tools/"
-        echo ""
-        echo "💡 Don't forget to commit in my-workspace-tools if you want to share:"
-        echo "   cd $SPACECAT_TOOLS_DIR"
-        echo "   git add index-local.js"
-        echo "   git commit -m 'Update audit worker config'"
-    fi
-else
-    # No value changes
-    echo "ℹ️  No configuration changes to save"
-fi
+echo "💾 Saving your settings for next run..."
+cd "$SCRIPT_DIR"
+write_config "audit.lastAuditType" "$NEW_AUDIT_TYPE"
+write_config "audit.lastSiteId" "$NEW_SITE_ID"
+write_config "audit.lastUseLocalData" "$NEW_USE_LOCAL"
+echo "✅ Settings saved to .last-run-config.json"
 
-# Always restore original in audit worker (will be synced from central next run)
+# Always restore original index-local.js in audit worker
+cd "$AUDIT_WORKER_DIR"
 if [ -f "src/index-local.js.bak" ]; then
     mv src/index-local.js.bak src/index-local.js
 fi
 
 echo ""
 echo "Done! 🎉"
+echo ""
+echo "💡 Your settings are remembered for next run - just press ENTER to reuse them!"
 
