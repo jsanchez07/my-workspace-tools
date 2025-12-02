@@ -17,31 +17,36 @@ import path from 'path';
 import { main as universalMain } from './index.js';
 
 // ============================================================================
-// SUPPRESS X-RAY TRACING ERRORS IN LOCAL MODE
+// SUPPRESS X-RAY TRACING ERRORS IN LOCAL MODE  
 // ============================================================================
-// AWS X-Ray is not available locally, so we disable it entirely
-// This prevents X-Ray SDK from auto-instrumenting AWS SDK and other libraries
+// Disable X-Ray entirely for local testing
 process.env.AWS_XRAY_CONTEXT_MISSING = 'IGNORE_ERROR';
 process.env.AWS_XRAY_SDK_ENABLED = 'false';
-process.env._X_AMZN_TRACE_ID = '';
 
-// Monkey-patch console.error to filter out X-Ray noise
-const originalConsoleError = console.error;
+// Aggressively filter console.error to catch X-Ray errors from any source
+const originalError = console.error;
+const originalWarn = console.warn;
+const originalLog = console.log;
+
 console.error = (...args) => {
-  // Filter out X-Ray trace data errors
-  const message = args[0]?.message || args[0] || '';
-  if (typeof message === 'string' && message.includes('Missing AWS Lambda trace data for X-Ray')) {
-    return; // Silently ignore X-Ray errors
+  // Convert all args to strings for checking
+  const fullMessage = args.map(arg => {
+    if (arg instanceof Error) return arg.message + '\n' + arg.stack;
+    if (typeof arg === 'object') return JSON.stringify(arg);
+    return String(arg);
+  }).join(' ');
+  
+  // Filter out X-Ray related errors completely
+  if (fullMessage.includes('Missing AWS Lambda trace data for X-Ray') ||
+      fullMessage.includes('aws-xray-sdk-core') ||
+      fullMessage.includes('X-Ray')) {
+    return; // Silently drop X-Ray errors
   }
-  // Also check if it's an Error object with X-Ray message
-  if (args[0] instanceof Error && args[0].message?.includes('Missing AWS Lambda trace data for X-Ray')) {
-    return; // Silently ignore X-Ray errors
-  }
-  // Pass through all other errors
-  originalConsoleError.apply(console, args);
+  
+  originalError.apply(console, args);
 };
 
-console.log('🔧 [LOCAL TEST MODE] X-Ray tracing disabled and error logging filtered');
+console.log('🔧 [LOCAL TEST MODE] X-Ray error logging filtered at console level');
 
 // ============================================================================
 // LOCAL TESTING CONFIGURATION
