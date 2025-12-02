@@ -17,40 +17,10 @@ import path from 'path';
 import { main as universalMain } from './index.js';
 
 // ============================================================================
-// SUPPRESS X-RAY TRACING ERRORS IN LOCAL MODE  
-// ============================================================================
-// Disable X-Ray entirely for local testing
-process.env.AWS_XRAY_CONTEXT_MISSING = 'IGNORE_ERROR';
-process.env.AWS_XRAY_SDK_ENABLED = 'false';
-
-// Aggressively filter console.error to catch X-Ray errors from any source
-const originalError = console.error;
-const originalWarn = console.warn;
-const originalLog = console.log;
-
-console.error = (...args) => {
-  // Convert all args to strings for checking
-  const fullMessage = args.map(arg => {
-    if (arg instanceof Error) return arg.message + '\n' + arg.stack;
-    if (typeof arg === 'object') return JSON.stringify(arg);
-    return String(arg);
-  }).join(' ');
-  
-  // Filter out X-Ray related errors completely
-  if (fullMessage.includes('Missing AWS Lambda trace data for X-Ray') ||
-      fullMessage.includes('aws-xray-sdk-core') ||
-      fullMessage.includes('X-Ray')) {
-    return; // Silently drop X-Ray errors
-  }
-  
-  originalError.apply(console, args);
-};
-
-console.log('🔧 [LOCAL TEST MODE] X-Ray error logging filtered at console level');
-
-// ============================================================================
 // LOCAL TESTING CONFIGURATION
 // ============================================================================
+// Note: X-Ray errors are filtered at the shell level in run-audit-worker.sh
+// since they cannot be suppressed via JavaScript in a SAM Lambda environment
 // Read configuration from local-config.json (fallback) or environment variables
 let localConfig = {};
 try {
