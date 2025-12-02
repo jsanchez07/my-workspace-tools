@@ -6,6 +6,14 @@
 cleanup_on_exit() {
     cd "$AUDIT_WORKER_DIR" 2>/dev/null || return
     
+    # Restore index-local.js to original git-tracked version
+    if [ -f "src/index-local.js.original" ]; then
+        echo ""
+        echo "🔄 Restoring index-local.js to git-tracked version (cleanup)..."
+        mv src/index-local.js.original src/index-local.js
+        echo "✅ index-local.js restored"
+    fi
+    
     # Restore step-audit.js if it was patched
     if [ -f "src/common/step-audit.js.backup" ]; then
         echo ""
@@ -45,6 +53,19 @@ source "$SCRIPT_DIR/config-helpers.sh"
 
 AUDIT_WORKER_DIR="$SPACECAT_AUDIT_WORKER_DIR"
 INDEX_LOCAL_FILE="$AUDIT_WORKER_DIR/src/index-local.js"
+
+# ============================================================================
+# BACKUP: Save original git-tracked version BEFORE syncing
+# ============================================================================
+echo "💾 Backing up original index-local.js from audit worker repo..."
+if [ -f "$INDEX_LOCAL_FILE" ]; then
+    cp "$INDEX_LOCAL_FILE" "$INDEX_LOCAL_FILE.original"
+    echo "✅ Saved backup of git-tracked version"
+    echo ""
+else
+    echo "⚠️  Warning: index-local.js not found in audit worker"
+    echo ""
+fi
 
 # ============================================================================
 # SYNC: Copy master index-local.js from central repo to audit worker
@@ -499,10 +520,9 @@ if [[ "$CONFIRM" =~ ^[Nn] ]]; then
     exit 0
 fi
 
-# Backup original index-local.js
+# Update index-local.js with run-specific settings
 echo ""
-echo "📝 Updating index-local.js..."
-cp src/index-local.js src/index-local.js.bak
+echo "📝 Updating index-local.js with your run settings..."
 
 # Update the file using Node.js for safe string replacement
 node -e "
@@ -637,7 +657,7 @@ fs.writeFileSync('src/index-local.js', content);
 
 if [ $? -ne 0 ]; then
     echo "❌ Error updating index-local.js"
-    mv src/index-local.js.bak src/index-local.js
+    mv src/index-local.js.original src/index-local.js
     exit 1
 fi
 
@@ -880,7 +900,7 @@ sam build --template template-local.yml
 if [ $? -ne 0 ]; then
     echo ""
     echo "❌ Build failed!"
-    mv src/index-local.js.bak src/index-local.js
+    mv src/index-local.js.original src/index-local.js
     exit 1
 fi
 
@@ -1089,10 +1109,11 @@ write_config "audit.lastSiteId" "$NEW_SITE_ID"
 write_config "audit.lastUseLocalData" "$NEW_USE_LOCAL"
 echo "✅ Settings saved to .last-run-config.json"
 
-# Always restore original index-local.js in audit worker
+# Always restore original git-tracked index-local.js in audit worker
 cd "$AUDIT_WORKER_DIR"
-if [ -f "src/index-local.js.bak" ]; then
-    mv src/index-local.js.bak src/index-local.js
+if [ -f "src/index-local.js.original" ]; then
+    mv src/index-local.js.original src/index-local.js
+    echo "✅ Restored index-local.js to original git-tracked state"
 fi
 
 echo ""
