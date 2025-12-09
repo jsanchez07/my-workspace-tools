@@ -10,17 +10,15 @@
  * governing permissions and limitations under the License.
  */
 /* eslint-disable no-console */
+
 import { GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import fs from 'fs';
 import path from 'path';
-
 import { main as universalMain } from './index.js';
 
 // ============================================================================
 // LOCAL TESTING CONFIGURATION
 // ============================================================================
-// Note: X-Ray errors are filtered at the shell level in run-audit-worker.sh
-// since they cannot be suppressed via JavaScript in a SAM Lambda environment
 // Read configuration from local-config.json (fallback) or environment variables
 let localConfig = {};
 try {
@@ -424,8 +422,21 @@ export const main = async () => {
             getDescription: () => opportunityData.description || '',
             getGuidance: () => opportunityData.guidance || {},
             getTags: () => opportunityData.tags || [],
-            addSuggestions: async () => {
+            addSuggestions: async (suggestions) => {
               console.log('🔧 [MOCK DynamoDB] Opportunity.addSuggestions called');
+              console.log(`   Adding ${suggestions?.length || 0} suggestions`);
+              
+              // Log suggestions in a readable format
+              if (suggestions && suggestions.length > 0) {
+                console.log('\n');
+                console.log('═══════════════════════════════════════════════════════════');
+                console.log('💡 SUGGESTIONS BEING ADDED');
+                console.log('═══════════════════════════════════════════════════════════');
+                console.log(JSON.stringify(suggestions, null, 2));
+                console.log('═══════════════════════════════════════════════════════════');
+                console.log('\n');
+              }
+              
               // Just return the mock opportunity with updated suggestions
               return mockOpportunity;
             },
@@ -466,9 +477,17 @@ export const main = async () => {
       findById: async (siteId) => {
         console.log(`🔧 [MOCK DynamoDB] Site.findById called with siteId: ${siteId}`);
 
+        // Map known site IDs to their base URLs
+        const siteUrlMap = {
+          '1db7b770-db7f-4c52-a9dc-6e05add6c11e': 'https://www.asianpaints.com',
+        };
+        
+        const baseURL = siteUrlMap[siteId] || 'https://example.com';
+        console.log(`   Using base URL: ${baseURL}`);
+
         return {
           getId: () => siteId,
-          getBaseURL: () => 'https://example.com',
+          getBaseURL: () => baseURL,
           getDeliveryType: () => 'aem_edge',
           getGitHubURL: () => null,
           getOrganizationId: () => '00000000-0000-0000-0000-000000000000',
@@ -529,8 +548,21 @@ export const main = async () => {
           getType: () => opportunityData.type,
           getSuggestions: () => opportunityData.suggestions || [],
           getData: () => opportunityData.data || {},
-          addSuggestions: async () => {
+          addSuggestions: async (suggestions) => {
             console.log('🔧 [MOCK DynamoDB] Opportunity.addSuggestions called');
+            console.log(`   Adding ${suggestions?.length || 0} suggestions`);
+            
+            // Log suggestions in a readable format
+            if (suggestions && suggestions.length > 0) {
+              console.log('\n');
+              console.log('═══════════════════════════════════════════════════════════');
+              console.log('💡 SUGGESTIONS BEING ADDED');
+              console.log('═══════════════════════════════════════════════════════════');
+              console.log(JSON.stringify(suggestions, null, 2));
+              console.log('═══════════════════════════════════════════════════════════');
+              console.log('\n');
+            }
+            
             return mockOpportunity;
           },
           save: async () => {
@@ -565,57 +597,91 @@ export const main = async () => {
         };
       },
     };
+
+    console.log('🔧 [LOCAL TEST MODE] Adding Suggestion mock');
+    context.dataAccess.Suggestion = {
+      STATUSES: {
+        NEW: 'NEW',
+        APPROVED: 'APPROVED',
+        IN_PROGRESS: 'IN_PROGRESS',
+        SKIPPED: 'SKIPPED',
+        FIXED: 'FIXED',
+        ERROR: 'ERROR',
+        OUTDATED: 'OUTDATED',
+      },
+      allByOpportunityIdAndStatus: async (opportunityId, status) => {
+        console.log('🔧 [MOCK DynamoDB] Suggestion.allByOpportunityIdAndStatus called');
+        console.log(`   opportunityId: ${opportunityId}, status: ${status}`);
+        console.log('   Returning empty array (SQS sending skipped for local testing)');
+        return [];
+      },
+    };
+
+    // Note: Organization and Entitlement mocks are now added via Proxy intercept
+    // at the bottom of this file, after dataAccess is initialized by the wrapper
   }
 
-  // ============================================================================
-  // RUN AUDIT WITH DATA ACCESS MOCKING
-  // ============================================================================
-  // Store our mocks before universalMain initializes the real dataAccess
-  const mockDataAccess = context.dataAccess;
+  // Note: We don't need to mock ScrapeJob or ScrapeResult because the run-audit-worker.sh
+  // script patches step-audit.js to bypass getScrapeResultPaths() entirely and use
+  // context.scrapeResultPaths directly (which we populate above from local files)
 
-  // Create a proxy to preserve our mocks when dataAccess is set by wrappers
+  // ============================================================================
+  // PROXY CONTEXT TO INTERCEPT dataAccess INITIALIZATION
+  // ============================================================================
+  // The dataAccess wrapper from @adobe/spacecat-shared-data-access will replace
+  // context.dataAccess entirely. We use a Proxy to intercept this and add our mocks.
   const contextProxy = new Proxy(context, {
-    // eslint-disable-next-line no-param-reassign
-    set(target, prop, value) {
-      if (prop === 'dataAccess' && mockDataAccess) {
-        // The wrapper is setting dataAccess - merge our mocks into it
-        console.log('🔧 [LOCAL TEST MODE] Merging mocks into real dataAccess');
-
-        // Wrap the Audit methods to use our mocks
-        if (mockDataAccess.Audit) {
-          const originalAudit = value.Audit;
-          // eslint-disable-next-line no-param-reassign
-          value.Audit = {
-            ...originalAudit,
-            findLatest: async (...args) => {
-              console.log('🔧 [MOCK DynamoDB] Audit.findLatest intercepted - returning null');
-              return mockDataAccess.Audit.findLatest(...args);
-            },
-            allBySiteIdAndAuditType: async (...args) => {
-              console.log('🔧 [MOCK DynamoDB] Audit.allBySiteIdAndAuditType intercepted');
-              return mockDataAccess.Audit.allBySiteIdAndAuditType(...args);
+    set(target, property, value) {
+      if (property === 'dataAccess' && value) {
+        console.log('🔧 [LOCAL TEST MODE] Intercepted dataAccess initialization, adding mocks');
+        
+        // Add Organization mock if it doesn't exist
+        if (!value.Organization) {
+          console.log('🔧 [LOCAL TEST MODE] Adding Organization mock');
+          value.Organization = {
+            findById: async (organizationId) => {
+              console.log('🔧 [MOCK DynamoDB] Organization.findById called');
+              console.log(`   organizationId: ${organizationId}`);
+              console.log('   Returning mock organization (for entitlement check)');
+              return {
+                getId: () => organizationId,
+                getName: () => 'Mock Organization',
+                getImsOrgId: () => 'mock-ims-org-id@AdobeOrg',
+              };
             },
           };
         }
-
-        // Wrap SiteTopPage if we have a mock
-        if (mockDataAccess.SiteTopPage) {
-          // eslint-disable-next-line no-param-reassign
-          value.SiteTopPage = mockDataAccess.SiteTopPage;
-        }
-
-        // Wrap Site if we have a mock
-        if (mockDataAccess.Site) {
-          // eslint-disable-next-line no-param-reassign
-          value.Site = mockDataAccess.Site;
+        
+        // Add Entitlement mock if it doesn't exist
+        if (!value.Entitlement) {
+          console.log('🔧 [LOCAL TEST MODE] Adding Entitlement mock');
+          value.Entitlement = {
+            PRODUCT_CODES: {
+              ASO: 'ASO',
+            },
+            TIERS: {
+              FREE: 'FREE',
+              PAID: 'PAID',
+            },
+            findByOrganizationIdAndProductCode: async (organizationId, productCode) => {
+              console.log('🔧 [MOCK DynamoDB] Entitlement.findByOrganizationIdAndProductCode called');
+              console.log(`   organizationId: ${organizationId}, productCode: ${productCode}`);
+              console.log('   Returning null (no entitlement - will bypass checks)');
+              return null;
+            },
+          };
         }
       }
-      // eslint-disable-next-line no-param-reassign
-      target[prop] = value;
+      
+      // Set the property normally
+      target[property] = value;
       return true;
     },
   });
 
+  // ============================================================================
+  // RUN AUDIT
+  // ============================================================================
   const result = await universalMain(message, contextProxy);
   return result;
 };

@@ -255,54 +255,9 @@ case "$NEW_AUDIT_TYPE" in
         ;;
 esac
 
-# STEP 2: Ask audit-specific question about local data
+# STEP 2: Detect if audit is multi-step (need this BEFORE asking about local data)
 echo ""
-if [[ "$NEW_AUDIT_TYPE" == "canonical" ]] || [[ "$NEW_AUDIT_TYPE" == "hreflang" ]]; then
-    # For canonical/hreflang: Ask about using local URL list
-    echo "ℹ️  The '$NEW_AUDIT_TYPE' audit:"
-    echo "   • Reads URL list from: urls-to-scrape.txt"
-    echo "   • Fetches pages LIVE from the website (not from scraper data)"
-    echo ""
-    echo "💡 Make sure you've run: ./get-top-pages.sh"
-    echo ""
-    
-    read -p "Use local URL list from urls-to-scrape.txt? (Y/n): " USE_LOCAL_URLS
-    if [[ "$USE_LOCAL_URLS" =~ ^[Nn] ]]; then
-        # User wants to fetch from DynamoDB instead
-        NEW_USE_LOCAL="false"
-        echo "   → Will fetch URLs from DynamoDB (production data)"
-    else
-        # Default to using local URLs for canonical/hreflang
-        NEW_USE_LOCAL="false"  # Not using scraper data
-        USE_LOCAL_URLS="Y"  # Explicitly set for later reference
-        echo "   → Will use local URLs from urls-to-scrape.txt"
-    fi
-else
-    # For other audits: Ask about using local scraper data
-    USE_LOCAL_URLS=""  # Not applicable for non-canonical/hreflang audits
-    
-    echo "ℹ️  The '$NEW_AUDIT_TYPE' audit can use:"
-    echo "   • Local scraper data (from your local scraper run)"
-    echo "   • Or fetch from S3 (production scraper results)"
-    echo ""
-    
-    read -p "Use local scraper data? (true/false) [current: $CURRENT_USE_LOCAL]: " NEW_USE_LOCAL
-    if [ -z "$NEW_USE_LOCAL" ]; then
-        NEW_USE_LOCAL="$CURRENT_USE_LOCAL"
-    fi
-    
-    # Validate boolean input
-    if [[ "$NEW_USE_LOCAL" != "true" && "$NEW_USE_LOCAL" != "false" ]]; then
-        echo "⚠️  Invalid value. Must be 'true' or 'false'. Using current value: $CURRENT_USE_LOCAL"
-        NEW_USE_LOCAL="$CURRENT_USE_LOCAL"
-    fi
-    
-    if [[ "$NEW_USE_LOCAL" == "true" ]]; then
-        echo "   → Will use local scraper data"
-    else
-        echo "   → Will fetch from S3"
-    fi
-fi
+echo "🔍 Analyzing audit structure..."
 
 HANDLER_FILE="$SPACECAT_AUDIT_WORKER_DIR/src/$AUDIT_DIR/handler.js"
 
@@ -362,7 +317,139 @@ fi
 
 echo ""
 
-# Prompt for Site ID (always show scraper's SITE_ID as helpful hint)
+# STEP 3: Set flags based on specific audit requirements
+USE_LOCAL_URLS=""  # Used for canonical/hreflang
+
+# Determine what each audit needs
+case "$NEW_AUDIT_TYPE" in
+    "canonical"|"hreflang")
+        # These audits need: Top pages list, then fetch LIVE from website
+        echo "ℹ️  The '$NEW_AUDIT_TYPE' audit:"
+        echo "   • Reads URL list from: urls-to-scrape.txt"
+        echo "   • Fetches pages LIVE from the website (not from scraper data)"
+        echo ""
+        echo "💡 Make sure you've run: ./get-top-pages.sh"
+        echo ""
+        
+        read -p "Use local URL list from urls-to-scrape.txt? (Y/n): " USE_LOCAL_URLS
+        if [[ "$USE_LOCAL_URLS" =~ ^[Nn] ]]; then
+            # User wants to fetch from DynamoDB instead
+            NEW_USE_LOCAL="false"
+            echo "   → Will fetch URLs from DynamoDB (production data)"
+        else
+            # Default to using local URLs for canonical/hreflang
+            NEW_USE_LOCAL="false"  # Not using scraper data
+            USE_LOCAL_URLS="Y"  # Explicitly set for later reference
+            echo "   → Will use local URLs from urls-to-scrape.txt"
+        fi
+        ;;
+        
+    "structured-data")
+        # Special case: needs BOTH top pages AND scraper data
+        NEW_USE_LOCAL="true"  # Needs scraper data
+        USE_LOCAL_URLS="Y"    # Also needs top pages
+        echo "ℹ️  The '$NEW_AUDIT_TYPE' audit:"
+        echo "   • Needs BOTH top pages list AND scraper data"
+        echo "   • Will use local URLs from urls-to-scrape.txt"
+        echo "   • Will use local scraper data"
+        if [ "$IS_MULTI_STEP" = true ]; then
+            echo "   • Skipping to final step: '$FINAL_STEP_NAME'"
+        fi
+        echo ""
+        echo "   💡 Make sure you've run:"
+        echo "      1. ./get-top-pages.sh  (get URL list)"
+        echo "      2. cd $SPACECAT_SCRAPER_DIR && npm run scrape"
+        echo ""
+        echo "   → Automatically set: USE_LOCAL_SCRAPER_DATA=true, USE_LOCAL_TOP_PAGES=true"
+        ;;
+        
+    "redirect-chains")
+        # Special case: fetches LIVE from website, no scraper data needed
+        NEW_USE_LOCAL="false"  # Doesn't use scraper data
+        USE_LOCAL_URLS=""      # Not applicable
+        echo "ℹ️  The '$NEW_AUDIT_TYPE' audit:"
+        echo "   • Fetches LIVE from the website"
+        echo "   • Looks for: /redirects.json on the site"
+        echo "   • Does NOT use scraper data or top pages"
+        echo ""
+        echo "   💡 This audit requires:"
+        echo "      • A Site ID (to get the base URL)"
+        echo "      • Network access to the website"
+        echo ""
+        echo "   → No local data needed"
+        ;;
+        
+    "sitemap")
+        # Special case: fetches LIVE from website, no scraper data needed
+        NEW_USE_LOCAL="false"  # Doesn't use scraper data
+        USE_LOCAL_URLS=""      # Not applicable
+        echo "ℹ️  The '$NEW_AUDIT_TYPE' audit:"
+        echo "   • Fetches LIVE from the website"
+        echo "   • Discovers sitemaps (/sitemap.xml, /robots.txt)"
+        echo "   • Validates URLs in the sitemaps"
+        echo "   • Does NOT use scraper data or top pages"
+        echo ""
+        echo "   💡 This audit requires:"
+        echo "      • A Site ID (to get the base URL)"
+        echo "      • Network access to the website"
+        echo ""
+        echo "   → No local data needed"
+        ;;
+        
+    *)
+        # All other audits: check if multi-step
+        USE_LOCAL_URLS=""  # Not applicable for other audits
+        
+        if [ "$IS_MULTI_STEP" = true ]; then
+            # Multi-step audits MUST use local data (can't run Steps 1 & 2 locally)
+            NEW_USE_LOCAL="true"
+            echo "ℹ️  Multi-step audit: '$NEW_AUDIT_TYPE'"
+            echo "   • Local testing requires pre-scraped data"
+            echo "   • Will automatically use local scraper data"
+            echo "   • Skipping to final step: '$FINAL_STEP_NAME'"
+            echo ""
+            
+            if [ "$NEW_AUDIT_TYPE" = "broken-internal-links" ]; then
+                echo "   💡 For broken-internal-links, make sure you've run:"
+                echo "      1. ./fetch-broken-links.sh  (fetch RUM data)"
+                echo "      2. cd $SPACECAT_SCRAPER_DIR && npm run scrape"
+            else
+                echo "   💡 Make sure you've run the scraper first:"
+                echo "      cd $SPACECAT_SCRAPER_DIR && npm run scrape"
+            fi
+            
+            echo ""
+            echo "   → Automatically set: USE_LOCAL_SCRAPER_DATA=true"
+        else
+            # Single-step audits can optionally use S3
+            echo "ℹ️  The '$NEW_AUDIT_TYPE' audit can use:"
+            echo "   • Local scraper data (from your local scraper run)"
+            echo "   • Or fetch from S3 (production scraper results)"
+            echo ""
+            
+            read -p "Use local scraper data? (true/false) [current: $CURRENT_USE_LOCAL]: " NEW_USE_LOCAL
+            if [ -z "$NEW_USE_LOCAL" ]; then
+                NEW_USE_LOCAL="$CURRENT_USE_LOCAL"
+            fi
+            
+            # Validate boolean input
+            if [[ "$NEW_USE_LOCAL" != "true" && "$NEW_USE_LOCAL" != "false" ]]; then
+                echo "⚠️  Invalid value. Must be 'true' or 'false'. Using current value: $CURRENT_USE_LOCAL"
+                NEW_USE_LOCAL="$CURRENT_USE_LOCAL"
+            fi
+            
+            if [[ "$NEW_USE_LOCAL" == "true" ]]; then
+                echo "   → Will use local scraper data"
+            else
+                echo "   → Will fetch from S3"
+            fi
+        fi
+        ;;
+esac
+
+echo ""
+
+# STEP 4: Prompt for Site ID (always show scraper's SITE_ID as helpful hint)
 echo ""
 
 # Try to get scraper's SITE_ID for reference
@@ -451,66 +538,20 @@ if [[ "$NEW_AUDIT_TYPE" == "canonical" ]] || [[ "$NEW_AUDIT_TYPE" == "hreflang" 
     else
         echo "  URL Source: DynamoDB (production)"
     fi
+elif [[ "$NEW_AUDIT_TYPE" == "structured-data" ]]; then
+    echo "  URL Source: Local (urls-to-scrape.txt)"
+    echo "  Scraper Data: Local"
 else
     echo "  Scraper Data: $([[ "$NEW_USE_LOCAL" == "true" ]] && echo "Local" || echo "S3")"
 fi
 
-# Initialize SKIP_TO_FINAL (used in Node.js script later)
-SKIP_TO_FINAL=false
-
-# Show multi-step info and handle step selection for broken-internal-links
-if [ "$NEW_AUDIT_TYPE" = "broken-internal-links" ] && [ "$IS_MULTI_STEP" = true ]; then
-    echo ""
-    echo "  🔧 broken-internal-links requires step-by-step execution:"
-    echo "     Step 1: Fetch RUM data (broken link list)"
-    echo "     Step 2: Run scraper manually with those URLs"
-    echo "     Step 3: Generate AI suggestions from scraped pages"
-    echo ""
-    echo "  Which step do you want to run?"
-    echo "    1 - Run Step 1 (fetch RUM data for broken links)"
-    echo "    3 - Run Step 3 (generate suggestions from scraped data)"
-    echo ""
-    read -p "  Choose step [1/3]: " STEP_CHOICE
-    
-    if [ "$STEP_CHOICE" = "1" ]; then
-        echo "  → Will run Step 1 only (fetch RUM data)"
-        SKIP_TO_FINAL=false
-        
-        # Prompt for RUM domain key (required for Step 1)
-        echo ""
-        echo "  🔑 Step 1 requires a RUM domain key to access RUM API"
-        echo "     Get it from: https://aemcs-workspace.adobe.com/customer/generate-rum-domain-key"
-        echo ""
-        read -p "  Enter RUM domain key: " RUM_DOMAIN_KEY
-        
-        if [ -z "$RUM_DOMAIN_KEY" ]; then
-            echo ""
-            echo "  ⚠️  RUM domain key is required for Step 1. Cannot proceed without it."
-            exit 1
-        fi
-        
-        # Export as environment variable for the audit to use
-        export RUM_DOMAIN_KEY="$RUM_DOMAIN_KEY"
-        echo "  ✅ RUM domain key set"
-    elif [ "$STEP_CHOICE" = "3" ]; then
-        echo "  → Will skip to Step 3 (assumes you already ran scraper)"
-        SKIP_TO_FINAL=true
-    else
-        echo "  ⚠️  Invalid choice. Defaulting to Step 1."
-        SKIP_TO_FINAL=false
-    fi
-elif [ "$IS_MULTI_STEP" = true ]; then
-    # For ALL multi-step audits in local testing, skip to final step
-    # (Running from beginning requires SQS queues which don't exist locally)
-    echo ""
-    echo "  🔧 Multi-step audit detected!"
-    echo "  ↳ Will skip to final step: '$FINAL_STEP_NAME'"
-    if [ "$NEW_USE_LOCAL" = "true" ]; then
-        echo "  ↳ Using local scraper data"
-    else
-        echo "  ↳ Using S3 scraper data (assumes scraper already ran in AWS)"
-    fi
+# For ALL multi-step audits, always skip to final step
+# (Running from beginning requires SQS queues which don't exist locally)
+# For broken-internal-links Step 1, use ./fetch-broken-links.sh instead
+if [ "$IS_MULTI_STEP" = true ]; then
     SKIP_TO_FINAL=true
+else
+    SKIP_TO_FINAL=false
 fi
 
 echo ""
@@ -732,18 +773,65 @@ fi
 
 echo ""
 
+# Apply scrape result paths patch for ALL audits that use scraper data
+echo "🔧 Applying scrape result paths patch to step-audit.js..."
+
+# Note: File is already backed up above, no need to backup again
+# Apply patch using Node.js for robust pattern matching
+node -e "
+const fs = require('fs');
+let content = fs.readFileSync('src/common/step-audit.js', 'utf8');
+
+// ============================================================================
+// PATCH: Add mock scrape job ID detection around getScrapeResultPaths call
+// This is needed for ANY audit that uses scraper data (meta-tags, product-metatags, etc.)
+// ============================================================================
+// Find the pattern: if (hasScrapeJobId) { ... const scrapeClient = ... getScrapeResultPaths(...) }
+const getScrapePathsPattern = /(\/\/ If there are scrape results, load the paths\s+if \(hasScrapeJobId\) \{\s+)(stepContext\.scrapeJobId = auditContext\.scrapeJobId;\s+const scrapeClient = ScrapeClient\.createFrom\(context\);\s+stepContext\.scrapeResultPaths = await scrapeClient\s+\.getScrapeResultPaths\(auditContext\.scrapeJobId\);)/s;
+
+if (getScrapePathsPattern.test(content)) {
+  content = content.replace(
+    getScrapePathsPattern,
+    \`\$1// LOCAL TESTING: Check if we're using a mock scrape job ID (all zeros UUID)
+        const isMockScrapeJobId = auditContext.scrapeJobId === '00000000-0000-0000-0000-000000000000';
+        
+        if (isMockScrapeJobId && context.scrapeResultPaths) {
+          log.info('[LOCAL TEST MODE] Using pre-loaded scrape result paths from context');
+          stepContext.scrapeJobId = auditContext.scrapeJobId;
+          stepContext.scrapeResultPaths = context.scrapeResultPaths;
+        } else {
+          \$2
+        }\`
+  );
+  console.log('✅ Applied scrape result paths bypass patch');
+  fs.writeFileSync('src/common/step-audit.js', content);
+} else {
+  console.log('⚠️  Pattern not found - step-audit.js may have changed');
+  console.log('   Audit will try to use real ScrapeClient (may fail)');
+}
+"
+
+if [ $? -ne 0 ]; then
+    echo "❌ Error patching step-audit.js for scrape results"
+    mv src/common/step-audit.js.backup src/common/step-audit.js 2>/dev/null
+    exit 1
+fi
+
+echo ""
+
 # Apply additional step-audit.js patches for multi-step audits (only when skipping to final step)
 if [ "$IS_MULTI_STEP" = true ] && [ "$SKIP_TO_FINAL" = true ]; then
     echo "🔧 Applying additional patches to step-audit.js for multi-step final step..."
     
-    # Note: File is already backed up above, no need to backup again
-    # Apply patches using Node.js for robust pattern matching
+    # Note: File is already backed up and partially patched above
+    # Apply additional patches using Node.js for robust pattern matching
     node -e "
 const fs = require('fs');
 let content = fs.readFileSync('src/common/step-audit.js', 'utf8');
 
 // ============================================================================
-// PATCH 1: Add mock audit ID detection around loadExistingAudit call
+// PATCH: Add mock audit ID detection around loadExistingAudit call
+// This is only needed when skipping to a subsequent step
 // ============================================================================
 // Find the pattern: if (hasNext) { ... stepContext.audit = await loadExistingAudit(...) }
 const loadAuditPattern = /(\/\/ For subsequent steps, load existing audit\s+if \(hasNext\) \{\s+)(stepContext\.audit = await loadExistingAudit\(auditContext\.auditId, context\);)/s;
@@ -770,51 +858,25 @@ if (loadAuditPattern.test(content)) {
           \$2
         }\`
   );
-  console.log('✅ Patch 1: Added mock audit ID detection');
+  console.log('✅ Applied mock audit ID detection patch');
 } else {
-  console.log('⚠️  Patch 1: Pattern not found - step-audit.js may have changed');
+  console.log('⚠️  Pattern not found - step-audit.js may have changed');
   console.log('   Audit will try to use real database lookups');
-}
-
-// ============================================================================
-// PATCH 2: Add mock scrape job ID detection around getScrapeResultPaths call
-// ============================================================================
-// Find the pattern: if (hasScrapeJobId) { ... const scrapeClient = ... getScrapeResultPaths(...) }
-const getScrapePathsPattern = /(\/\/ If there are scrape results, load the paths\s+if \(hasScrapeJobId\) \{\s+)(const scrapeClient = ScrapeClient\.createFrom\(context\);\s+stepContext\.scrapeResultPaths = await scrapeClient\s+\.getScrapeResultPaths\(auditContext\.scrapeJobId\);)/s;
-
-if (getScrapePathsPattern.test(content)) {
-  content = content.replace(
-    getScrapePathsPattern,
-    \`\$1// LOCAL TESTING: Check if we're using a mock scrape job ID (all zeros UUID)
-        const isMockScrapeJobId = auditContext.scrapeJobId === '00000000-0000-0000-0000-000000000000';
-        
-        if (isMockScrapeJobId && context.scrapeResultPaths) {
-          log.info('[LOCAL TEST MODE] Using pre-loaded scrape result paths from context');
-          stepContext.scrapeResultPaths = context.scrapeResultPaths;
-        } else {
-          \$2
-        }\`
-  );
-  console.log('✅ Patch 2: Added mock scrape job ID detection');
-} else {
-  console.log('⚠️  Patch 2: Pattern not found - step-audit.js may have changed');
-  console.log('   Audit will try to use real ScrapeClient');
 }
 
 fs.writeFileSync('src/common/step-audit.js', content);
 console.log('');
-console.log('✅ step-audit.js temporarily patched for local testing');
-console.log('   (Will be restored after audit run)');
+console.log('✅ step-audit.js fully patched for multi-step final step testing');
 "
     
     if [ $? -ne 0 ]; then
-        echo "❌ Error patching step-audit.js"
+        echo "❌ Error applying multi-step patches to step-audit.js"
         mv src/common/step-audit.js.backup src/common/step-audit.js 2>/dev/null
         exit 1
     fi
     echo ""
 else
-    echo "ℹ️  Single-step audit - no patches needed for step-audit.js"
+    echo "ℹ️  No additional patches needed (running from step 1 or single-step audit)"
     echo ""
 fi
 
@@ -929,12 +991,17 @@ echo "📝 Creating env.json for SAM..."
 USE_LOCAL_TOP_PAGES_VALUE="false"
 TOP_PAGES_FILE_VALUE=""
 
+# Set USE_LOCAL_TOP_PAGES based on audit requirements
 if [[ "$NEW_AUDIT_TYPE" == "canonical" ]] || [[ "$NEW_AUDIT_TYPE" == "hreflang" ]]; then
     # For canonical/hreflang, check if user chose to use local URLs
     if [[ ! "$USE_LOCAL_URLS" =~ ^[Nn] ]]; then
         USE_LOCAL_TOP_PAGES_VALUE="true"
         TOP_PAGES_FILE_VALUE="$SCRIPT_DIR/urls-to-scrape.txt"
     fi
+elif [[ "$NEW_AUDIT_TYPE" == "structured-data" ]]; then
+    # structured-data always needs top pages for local testing
+    USE_LOCAL_TOP_PAGES_VALUE="true"
+    TOP_PAGES_FILE_VALUE="$SCRIPT_DIR/urls-to-scrape.txt"
 fi
 
 cat > "$AUDIT_WORKER_DIR/env.json" <<EOF
@@ -978,9 +1045,6 @@ echo "🔍 Environment variables being passed to Lambda:"
 echo "   USE_LOCAL_SCRAPER_DATA: '$NEW_USE_LOCAL'"
 echo "   USE_LOCAL_TOP_PAGES: '$USE_LOCAL_TOP_PAGES_VALUE'"
 echo "   TOP_PAGES_FILE: '$TOP_PAGES_FILE_VALUE'"
-echo ""
-echo "📄 Full env.json contents:"
-cat "$AUDIT_WORKER_DIR/env.json"
 echo ""
 
 echo "📝 Creating local-config.json for Lambda to read directly..."
@@ -1045,13 +1109,24 @@ echo ""
 
 # Run SAM using the BUILT template (not source template)
 # This ensures env vars from env.json are properly applied
-# Filter ONLY X-Ray specific errors/stack traces - be conservative to avoid hiding real errors
-# Only filter lines that contain X-Ray-specific patterns
+# Filter out X-Ray related errors and orphaned stack traces at shell level
 sam local invoke \
   --template .aws-sam/build/template.yaml \
   SpacecatAuditWorkerFunction \
   --env-vars "$AUDIT_WORKER_DIR/env.json" \
-  2>&1 | grep -v -E "(Missing AWS Lambda trace data for X-Ray|aws-xray-sdk-core|contextMissingLogError|resolveLambdaTraceData|resolveSegment)" > output.txt
+  2>&1 | grep -v -E \
+  "(\
+^.*(getTraceId|log-wrapper\.js|xray\.js|Missing AWS Lambda trace data|aws-xray-sdk).*\
+|^\s+at (getTraceId|tracingFetch|validateCanonicalTag|validateCanonicalRecursively|validatePageHreflang)\
+|^\s+at (fetchContent|checkRobotsForSitemap|getSitemapUrls|findSitemap|checkSitemap|getBaseUrlPagesFromSitemaps|fetchWithHeadFallback|checkUrl|filterValidUrls)\
+|^\s+at file:\/\/\/var\/task\/(src|node_modules)\/.*\.js:[0-9]+:[0-9]+\
+|^\s+at (limitConcurrencyAllSettled|limitConcurrency|async |process\.processTicksAndRejections)\
+|^\s+at (async )?RunnerAudit\.\
+|^\s+at (async )?(run|Runtime\.main)\
+|^\s+at Array\.map\
+|^\s+at \/var\/task\/node_modules\/@smithy\/\
+)" \
+  > output.txt
 
 echo ""
 echo "✅ Audit completed! Output saved to output.txt"

@@ -113,7 +113,7 @@ if [ -n "$LAST_SITE_ID" ]; then
     echo "Last used SITE_ID: $LAST_SITE_ID"
     echo "Current in local.js: $CURRENT_SITE_ID"
 else
-    echo "Current SITE_ID: $CURRENT_SITE_ID"
+echo "Current SITE_ID: $CURRENT_SITE_ID"
 fi
 echo ""
 echo "Options:"
@@ -140,9 +140,9 @@ else
         # Update local.js with last SITE_ID
         sed -i.bak "s/const SITE_ID = '[^']*'/const SITE_ID = '$LAST_SITE_ID'/" local.js
         CURRENT_SITE_ID="$LAST_SITE_ID"
-    else
-        echo ""
-        echo "✅ Using current SITE_ID: $CURRENT_SITE_ID"
+else
+    echo ""
+    echo "✅ Using current SITE_ID: $CURRENT_SITE_ID"
     fi
 fi
 
@@ -280,7 +280,7 @@ console.log('✅ Removed executablePath line from abstract-handler.js - will use
     fi
     
     # Save SITE_ID to last-run config (for next time)
-    echo ""
+        echo ""
     echo "💾 Saving your SITE_ID for next run..."
     cd "$SCRIPT_DIR"
     write_config "scraper.lastSiteId" "$CURRENT_SITE_ID"
