@@ -19,6 +19,10 @@ import { main as universalMain } from './index.js';
 // ============================================================================
 // LOCAL TESTING CONFIGURATION
 // ============================================================================
+// Cache for suggestions (needed for broken-internal-links Step 2)
+// When addSuggestions is called, cache them so allByOpportunityIdAndStatus can return them
+const suggestionCache = new Map(); // key: opportunityId, value: array of suggestion objects
+
 // Read configuration from local-config.json (fallback) or environment variables
 let localConfig = {};
 try {
@@ -51,6 +55,17 @@ const USE_LOCAL_TOP_PAGES = process.env.USE_LOCAL_TOP_PAGES === 'true'
 const TOP_PAGES_FILE = process.env.TOP_PAGES_FILE
   || localConfig.TOP_PAGES_FILE
   || path.join(process.env.HOME || '', 'Documents/my-workspace-tools/urls-to-scrape.txt');
+
+// ============================================================================
+// RUM API CONFIGURATION
+// ============================================================================
+// For broken-internal-links audit, ensure RUM_DOMAIN_KEY is available
+// SAM's env.json sets Lambda environment variables, but we need to ensure
+// they're available in process.env for the RUM API client
+if (process.env.RUM_DOMAIN_KEY) {
+  console.log('🔧 [LOCAL TEST MODE] RUM_DOMAIN_KEY found in environment');
+  console.log(`   Key: ${process.env.RUM_DOMAIN_KEY.substring(0, 8)}...${process.env.RUM_DOMAIN_KEY.slice(-8)}`);
+}
 
 // Debug logging
 console.log('🔧 [LOCAL TEST MODE] Configuration:');
@@ -110,6 +125,45 @@ export const main = async () => {
         Records: [{
           body: JSON.stringify(messageBody),
         }],
+      },
+    },
+    // Mock SQS to prevent "QueueDoesNotExist" errors for multi-step audits locally
+    sqs: {
+      sendMessage: async (queueUrl, payload) => {
+        console.log('🔧 [MOCK SQS] sendMessage called (suppressed for local testing)');
+        console.log(`   Queue URL: ${queueUrl}`);
+        console.log(`   Payload type: ${payload?.type || 'unknown'}`);
+        
+        // Log the broken links payload to see if urlsSuggested is populated
+        if (payload?.type === 'guidance:broken-links' && payload?.data) {
+          const { brokenLinks, alternativeUrls } = payload.data;
+          console.log(`   📊 Total broken links in payload: ${brokenLinks?.length || 0}`);
+          console.log(`   📊 Total alternative URLs in payload: ${alternativeUrls?.length || 0}`);
+          
+          if (alternativeUrls && alternativeUrls.length > 0) {
+            console.log(`   📋 Sample alternative URLs (first 3):`);
+            alternativeUrls.slice(0, 3).forEach((url, i) => {
+              console.log(`      ${i + 1}. ${url}`);
+            });
+          } else {
+            console.log(`   ⚠️  NO ALTERNATIVE URLs - This is the problem!`);
+          }
+          
+          // Log first 3 broken links to see if urlsSuggested is populated
+          console.log(`\n   📋 Sample broken links (first 3):`);
+          brokenLinks.slice(0, 3).forEach((link, index) => {
+            console.log(`   ${index + 1}. urlFrom: ${link.urlFrom}`);
+            console.log(`      urlTo: ${link.urlTo}`);
+            console.log(`      urlsSuggested: [${link.urlsSuggested?.length || 0} URLs]`);
+            if (link.urlsSuggested && link.urlsSuggested.length > 0) {
+              console.log(`         → ${link.urlsSuggested.slice(0, 2).join(', ')}${link.urlsSuggested.length > 2 ? ', ...' : ''}`);
+            }
+          });
+          console.log('');
+        }
+        
+        // Don't actually send - just return success
+        return { MessageId: '00000000-0000-0000-0000-000000000000' };
       },
     },
   };
@@ -437,8 +491,22 @@ export const main = async () => {
                 console.log('\n');
               }
               
-              // Just return the mock opportunity with updated suggestions
-              return mockOpportunity;
+              // Return suggestion objects with getId() and getData() methods
+              // The handler needs these to build the Mystique payload
+              const suggestionObjects = suggestions.map((suggestion, index) => ({
+                getId: () => `suggestion-${index + 1}`,
+                getData: () => suggestion.data || {},
+                getStatus: () => suggestion.status || 'NEW',
+                getType: () => suggestion.type || 'CONTENT_UPDATE',
+                getRank: () => suggestion.rank || 100,
+              }));
+              
+              // Cache suggestions so Suggestion.allByOpportunityIdAndStatus can return them
+              const oppId = mockOpportunity.getId();
+              suggestionCache.set(oppId, suggestionObjects);
+              console.log(`   💾 Cached ${suggestionObjects.length} suggestions for opportunity ${oppId}`);
+              
+              return suggestionObjects;
             },
             save: async () => {
               console.log('🔧 [MOCK DynamoDB] Opportunity.save called');
@@ -465,6 +533,61 @@ export const main = async () => {
   }
 
   // ============================================================================
+  // MOCK RUM API CLIENT (for broken-internal-links audit)
+  // ============================================================================
+  // IMPORTANT: The RUM API client expects 'domainkey' to be passed in query OPTIONS,
+  // not in process.env! We need to inject it into all RUM queries.
+  if (process.env.RUM_DOMAIN_KEY && !context.rumApiClient) {
+    console.log('🔧 [LOCAL TEST MODE] Creating mock RUM API client with domain key injection');
+    
+    // Create a mock RUM API client that automatically injects the domain key
+    context.rumApiClient = {
+      query: async (queryName, options) => {
+        console.log(`🔧 [MOCK RUM] Query '${queryName}' called with options:`, JSON.stringify(options));
+        
+        // Inject the domain key into options
+        const optionsWithKey = {
+          ...options,
+          domainkey: process.env.RUM_DOMAIN_KEY,
+        };
+        
+        console.log(`🔧 [MOCK RUM] Injected domainkey into options`);
+        
+        // Now call the real RUM API client with the injected key
+        // We need to import it dynamically
+        const { default: RUMAPIClient } = await import('@adobe/spacecat-shared-rum-api-client');
+        const realClient = new RUMAPIClient({}, context.log || console);
+        
+        return realClient.query(queryName, optionsWithKey);
+      },
+      queryMulti: async (queries, options) => {
+        console.log(`🔧 [MOCK RUM] QueryMulti called with ${queries.length} queries`);
+        
+        // Inject the domain key into options
+        const optionsWithKey = {
+          ...options,
+          domainkey: process.env.RUM_DOMAIN_KEY,
+        };
+        
+        console.log(`🔧 [MOCK RUM] Injected domainkey into options`);
+        
+        // Now call the real RUM API client with the injected key
+        const { default: RUMAPIClient } = await import('@adobe/spacecat-shared-rum-api-client');
+        const realClient = new RUMAPIClient({}, context.log || console);
+        
+        return realClient.queryMulti(queries, optionsWithKey);
+      },
+      retrieveDomainkey: async (domain) => {
+        console.log(`🔧 [MOCK RUM] retrieveDomainkey called for domain: ${domain}`);
+        console.log(`🔧 [MOCK RUM] Returning injected domain key`);
+        return process.env.RUM_DOMAIN_KEY;
+      },
+    };
+    
+    console.log('✅ [MOCK RUM] RUM API client mock installed with automatic domain key injection');
+  }
+
+  // ============================================================================
   // MOCK SITE DATA ACCESS (fallback for audits not using local top pages)
   // ============================================================================
   if (!context.dataAccess) {
@@ -480,6 +603,7 @@ export const main = async () => {
         // Map known site IDs to their base URLs
         const siteUrlMap = {
           '1db7b770-db7f-4c52-a9dc-6e05add6c11e': 'https://www.asianpaints.com',
+          'cccdac43-1a22-4659-9086-b762f59b9928': 'https://www.bulk.com',
         };
         
         const baseURL = siteUrlMap[siteId] || 'https://example.com';
@@ -520,6 +644,26 @@ export const main = async () => {
         console.log(`   Audit type: ${auditData.auditType}`);
         console.log(`   Site ID: ${auditData.siteId}`);
 
+        // For broken-internal-links, extract and log the broken links data from auditResult
+        // (This is where the actual data is stored, NOT in the SQS continuation message)
+        if (auditData.auditType === 'broken-internal-links' && auditData.auditResult) {
+          const brokenLinks = auditData.auditResult.brokenInternalLinks || [];
+          console.log('');
+          console.log('═══════════════════════════════════════════════════════════════');
+          console.log('🔍 BROKEN INTERNAL LINKS DATA (from Audit Record)');
+          console.log('═══════════════════════════════════════════════════════════════');
+          console.log(`Total broken links found: ${brokenLinks.length}`);
+          if (brokenLinks.length > 0) {
+            console.log('');
+            console.log('Broken Links Data (JSON):');
+            console.log(JSON.stringify({ brokenInternalLinks: brokenLinks }, null, 2));
+          } else {
+            console.log('✅ Site is healthy - no broken internal links detected!');
+          }
+          console.log('═══════════════════════════════════════════════════════════════');
+          console.log('');
+        }
+
         return {
           getId: () => '00000000-0000-0000-0000-000000000000',
           getSiteId: () => auditData.siteId,
@@ -527,7 +671,100 @@ export const main = async () => {
           getAuditedAt: () => new Date().toISOString(),
           getScores: () => auditData.scores || {},
           getFullAuditRef: () => auditData.fullAuditRef || null,
+          getAuditResult: () => auditData.auditResult || {},
         };
+      },
+      findById: async (auditId) => {
+        console.log('🔧 [MOCK DynamoDB] Audit.findById called');
+        console.log(`   Audit ID: ${auditId}`);
+        
+        // For Step 2 of broken-internal-links, load the data from the JSON file
+        // created by fetch-broken-links.sh
+        try {
+          const fs = await import('fs');
+          const path = await import('path');
+          
+          // Get the site ID from config
+          const configPath = '/var/task/local-config.json';
+          let siteId = null;
+          
+          if (fs.existsSync(configPath)) {
+            const configData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+            siteId = configData.siteId;
+          }
+          
+          if (!siteId) {
+            console.warn('⚠️ [MOCK] Could not find siteId in local-config.json');
+            return null;
+          }
+          
+          // Look for the broken links JSON file
+          const jsonFileName = `broken-links-${siteId}.json`;
+          const jsonPath = path.resolve('/var/task', '..', '..', 'my-workspace-tools', jsonFileName);
+          
+          console.log(`   Looking for broken links data: ${jsonFileName}`);
+          
+          if (fs.existsSync(jsonPath)) {
+            const auditResult = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+            console.log(`✅ [MOCK] Loaded broken links data from ${jsonFileName}`);
+            console.log(`   Total broken links: ${auditResult.brokenInternalLinks?.length || 0}`);
+            
+            return {
+              getId: () => auditId,
+              getSiteId: () => siteId,
+              getAuditType: () => 'broken-internal-links',
+              getAuditedAt: () => new Date().toISOString(),
+              getScores: () => ({}),
+              getFullAuditRef: () => null,
+              getAuditResult: () => auditResult,
+            };
+          } else {
+            console.warn(`⚠️ [MOCK] Broken links JSON file not found: ${jsonPath}`);
+            return null;
+          }
+        } catch (error) {
+          console.error(`❌ [MOCK] Error loading audit data: ${error.message}`);
+          return null;
+        }
+      },
+    };
+  }
+
+  // Mock SiteTopPage for broken-internal-links suggestions
+  if (!context.dataAccess.SiteTopPage) {
+    console.log('🔧 [LOCAL TEST MODE] Adding SiteTopPage mock');
+    context.dataAccess.SiteTopPage = {
+      allBySiteIdAndSourceAndGeo: async (siteId, source, geo) => {
+        console.log('🔧 [MOCK DynamoDB] SiteTopPage.allBySiteIdAndSourceAndGeo called');
+        console.log(`   siteId: ${siteId}, source: ${source}, geo: ${geo}`);
+        
+        // Try to load top pages from local file (even if USE_LOCAL_TOP_PAGES is false)
+        try {
+          const topPagesPath = '/var/task/urls-to-scrape.txt';
+          if (fs.existsSync(topPagesPath)) {
+            const urlsContent = fs.readFileSync(topPagesPath, 'utf8');
+            const localTopPagesUrls = urlsContent
+              .split('\n')
+              .map((line) => line.trim())
+              .filter((line) => line && !line.startsWith('#'));
+            
+            console.log(`   ✅ Loaded ${localTopPagesUrls.length} URLs from ${topPagesPath}`);
+            
+            return localTopPagesUrls.map((url, index) => ({
+              getURL: () => url,
+              getUrl: () => url,
+              getSiteId: () => siteId,
+              getSource: () => source || 'rum',
+              getGeo: () => geo || 'global',
+              getTraffic: () => 1000 - index, // Mock traffic, decreasing by index
+            }));
+          }
+        } catch (error) {
+          console.warn(`   ⚠️  Could not load top pages: ${error.message}`);
+        }
+        
+        console.log('   Returning empty array (no top pages file found)');
+        return [];
       },
     };
   }
@@ -563,7 +800,22 @@ export const main = async () => {
               console.log('\n');
             }
             
-            return mockOpportunity;
+            // Return suggestion objects with getId() and getData() methods
+            // The handler needs these to build the Mystique payload
+            const suggestionObjects = suggestions.map((suggestion, index) => ({
+              getId: () => `suggestion-${index + 1}`,
+              getData: () => suggestion.data || {},
+              getStatus: () => suggestion.status || 'NEW',
+              getType: () => suggestion.type || 'CONTENT_UPDATE',
+              getRank: () => suggestion.rank || 100,
+            }));
+            
+            // Cache suggestions so Suggestion.allByOpportunityIdAndStatus can return them
+            const oppId = mockOpportunity.getId();
+            suggestionCache.set(oppId, suggestionObjects);
+            console.log(`   💾 Cached ${suggestionObjects.length} suggestions for opportunity ${oppId}`);
+            
+            return suggestionObjects;
           },
           save: async () => {
             console.log('🔧 [MOCK DynamoDB] Opportunity.save called');
@@ -590,9 +842,31 @@ export const main = async () => {
       findLatest: async () => {
         console.log('🔧 [MOCK DynamoDB] Configuration.findLatest - returning mock config');
         return {
-          isHandlerEnabledForSite: () => {
-            console.log('🔧 [MOCK DynamoDB] Configuration.isHandlerEnabledForSite - returning false (skip auto-suggest)');
-            return false;
+          getHandlers: () => {
+            console.log('🔧 [MOCK DynamoDB] Configuration.getHandlers - returning handlers with productCodes');
+            // The audit-utils.js logic is:
+            // if (isNonEmptyArray(handler?.productCodes)) {
+            //   check entitlements (needs Organization/Entitlement mocks)
+            // } else {
+            //   return false  // FAILS!
+            // }
+            // 
+            // So we MUST return handlers with productCodes array
+            // AND have working Organization/Entitlement mocks
+            return {
+              'broken-internal-links': { productCodes: ['ASO'] },
+              'canonical': { productCodes: ['ASO'] },
+              'hreflang': { productCodes: ['ASO'] },
+              'meta-tags': { productCodes: ['ASO'] },
+              'product-metatags': { productCodes: ['ASO'] },
+              'structured-data': { productCodes: ['ASO'] },
+              'sitemap': { productCodes: ['ASO'] },
+              'redirect-chains': { productCodes: ['ASO'] },
+            };
+          },
+          isHandlerEnabledForSite: (type, site) => {
+            console.log(`🔧 [MOCK DynamoDB] Configuration.isHandlerEnabledForSite('${type}') - returning true (enabled)`);
+            return true;
           },
         };
       },
@@ -612,13 +886,75 @@ export const main = async () => {
       allByOpportunityIdAndStatus: async (opportunityId, status) => {
         console.log('🔧 [MOCK DynamoDB] Suggestion.allByOpportunityIdAndStatus called');
         console.log(`   opportunityId: ${opportunityId}, status: ${status}`);
-        console.log('   Returning empty array (SQS sending skipped for local testing)');
+        
+        // Return cached suggestions if available
+        if (suggestionCache.has(opportunityId)) {
+          const cached = suggestionCache.get(opportunityId);
+          console.log(`   📦 Returning ${cached.length} cached suggestions from opportunity ${opportunityId}`);
+          return cached;
+        }
+        
+        console.log('   ⚠️  No cached suggestions found, returning empty array');
         return [];
       },
     };
 
-    // Note: Organization and Entitlement mocks are now added via Proxy intercept
-    // at the bottom of this file, after dataAccess is initialized by the wrapper
+    console.log('🔧 [LOCAL TEST MODE] Adding Organization mock');
+    context.dataAccess.Organization = {
+      findById: async (organizationId) => {
+        console.log('🔧 [MOCK DynamoDB] Organization.findById called');
+        console.log(`   organizationId: ${organizationId}`);
+        console.log('   Returning mock organization (for entitlement check)');
+        return {
+          getId: () => organizationId,
+          getName: () => 'Mock Organization',
+          getImsOrgId: () => 'mock-ims-org-id@AdobeOrg',
+        };
+      },
+    };
+
+    console.log('🔧 [LOCAL TEST MODE] Adding Entitlement mock');
+    context.dataAccess.Entitlement = {
+      PRODUCT_CODES: {
+        ASO: 'ASO',
+      },
+      TIERS: {
+        FREE: 'FREE',
+        PAID: 'PAID',
+      },
+      findByOrganizationIdAndProductCode: async (organizationId, productCode) => {
+        console.log('🔧 [MOCK DynamoDB] Entitlement.findByOrganizationIdAndProductCode called');
+        console.log(`   organizationId: ${organizationId}, productCode: ${productCode}`);
+        console.log('   Returning mock entitlement (PAID tier)');
+        return {
+          getId: () => '00000000-0000-0000-0000-000000000002',
+          getOrganizationId: () => organizationId,
+          getProductCode: () => productCode,
+          getTier: () => 'PAID',
+          getCreatedAt: () => new Date().toISOString(),
+          getUpdatedAt: () => new Date().toISOString(),
+        };
+      },
+    };
+
+    console.log('🔧 [LOCAL TEST MODE] Adding SiteEnrollment mock');
+    context.dataAccess.SiteEnrollment = {
+      allBySiteId: async (siteId) => {
+        console.log('🔧 [MOCK DynamoDB] SiteEnrollment.allBySiteId called');
+        console.log(`   siteId: ${siteId}`);
+        console.log('   Returning mock site enrollment (PAID tier)');
+        return [{
+          getId: () => '00000000-0000-0000-0000-000000000003',
+          getSiteId: () => siteId,
+          getEntitlementId: () => '00000000-0000-0000-0000-000000000002', // Must match Entitlement ID
+          getProductCode: () => 'ASO',
+          getTier: () => 'PAID',
+          getStatus: () => 'ACTIVE',
+          getCreatedAt: () => new Date().toISOString(),
+          getUpdatedAt: () => new Date().toISOString(),
+        }];
+      },
+    };
   }
 
   // Note: We don't need to mock ScrapeJob or ScrapeResult because the run-audit-worker.sh

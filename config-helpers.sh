@@ -16,6 +16,11 @@ init_last_run_config() {
   },
   "scraper": {
     "lastSiteId": ""
+  },
+  "brokenLinks": {
+    "lastSiteId": "",
+    "lastBaseUrl": "",
+    "lastRumDomainKey": ""
   }
 }
 EOF

@@ -325,13 +325,13 @@ case "$NEW_AUDIT_TYPE" in
     "canonical"|"hreflang")
         # These audits need: Top pages list, then fetch LIVE from website
         echo "ℹ️  The '$NEW_AUDIT_TYPE' audit:"
-        echo "   • Reads URL list from: urls-to-scrape.txt"
+        echo "   • Reads URL list from: local-data/urls-to-scrape.txt"
         echo "   • Fetches pages LIVE from the website (not from scraper data)"
         echo ""
         echo "💡 Make sure you've run: ./get-top-pages.sh"
         echo ""
         
-        read -p "Use local URL list from urls-to-scrape.txt? (Y/n): " USE_LOCAL_URLS
+        read -p "Use local URL list from local-data/urls-to-scrape.txt? (Y/n): " USE_LOCAL_URLS
         if [[ "$USE_LOCAL_URLS" =~ ^[Nn] ]]; then
             # User wants to fetch from DynamoDB instead
             NEW_USE_LOCAL="false"
@@ -340,7 +340,7 @@ case "$NEW_AUDIT_TYPE" in
             # Default to using local URLs for canonical/hreflang
             NEW_USE_LOCAL="false"  # Not using scraper data
             USE_LOCAL_URLS="Y"  # Explicitly set for later reference
-            echo "   → Will use local URLs from urls-to-scrape.txt"
+            echo "   → Will use local URLs from local-data/urls-to-scrape.txt"
         fi
         ;;
         
@@ -350,7 +350,7 @@ case "$NEW_AUDIT_TYPE" in
         USE_LOCAL_URLS="Y"    # Also needs top pages
         echo "ℹ️  The '$NEW_AUDIT_TYPE' audit:"
         echo "   • Needs BOTH top pages list AND scraper data"
-        echo "   • Will use local URLs from urls-to-scrape.txt"
+        echo "   • Will use local URLs from local-data/urls-to-scrape.txt"
         echo "   • Will use local scraper data"
         if [ "$IS_MULTI_STEP" = true ]; then
             echo "   • Skipping to final step: '$FINAL_STEP_NAME'"
@@ -534,12 +534,12 @@ echo "  Audit Type: $NEW_AUDIT_TYPE"
 echo "  Site ID: $NEW_SITE_ID"
 if [[ "$NEW_AUDIT_TYPE" == "canonical" ]] || [[ "$NEW_AUDIT_TYPE" == "hreflang" ]]; then
     if [[ ! "$USE_LOCAL_URLS" =~ ^[Nn] ]]; then
-        echo "  URL Source: Local (urls-to-scrape.txt)"
+        echo "  URL Source: Local (local-data/urls-to-scrape.txt)"
     else
         echo "  URL Source: DynamoDB (production)"
     fi
 elif [[ "$NEW_AUDIT_TYPE" == "structured-data" ]]; then
-    echo "  URL Source: Local (urls-to-scrape.txt)"
+    echo "  URL Source: Local (local-data/urls-to-scrape.txt)"
     echo "  Scraper Data: Local"
 else
     echo "  Scraper Data: $([[ "$NEW_USE_LOCAL" == "true" ]] && echo "Local" || echo "S3")"
@@ -845,6 +845,33 @@ if (loadAuditPattern.test(content)) {
         
         if (isMockAuditId) {
           log.info('[LOCAL TEST MODE] Using mock audit object');
+          // For broken-internal-links Step 2, load the data from JSON file
+          // The shell script copies the JSON file into /var/task/ (the build directory)
+          let auditResult = { success: false };
+          if (type === 'broken-internal-links') {
+            try {
+              const { readFileSync, existsSync } = await import('fs');
+              const jsonFileName = \\\`broken-links-\\\${siteId}.json\\\`;
+              const jsonPath = \\\`/var/task/\\\${jsonFileName}\\\`;
+              
+              if (existsSync(jsonPath)) {
+                auditResult = JSON.parse(readFileSync(jsonPath, 'utf8'));
+                // Ensure success flag is set (needed for handler logic)
+                if (!auditResult.success && auditResult.brokenInternalLinks) {
+                  auditResult.success = true;
+                }
+                log.info(\\\`[LOCAL TEST MODE] Loaded broken links data from \\\${jsonFileName}\\\`);
+                log.info(\\\`   Total broken links: \\\${auditResult.brokenInternalLinks?.length || 0}\\\`);
+                log.info(\\\`   Success flag: \\\${auditResult.success}\\\`);
+              } else {
+                log.warn(\\\`[LOCAL TEST MODE] Broken links JSON not found: \\\${jsonPath}\\\`);
+                log.warn(\\\`   Run fetch-broken-links.sh first to generate Step 1 data\\\`);
+              }
+            } catch (error) {
+              log.error(\\\`[LOCAL TEST MODE] Error loading broken links data: \\\${error.message}\\\`);
+            }
+          }
+          
           // Create a minimal mock audit object with the required methods
           stepContext.audit = {
             getId: () => auditContext.auditId,
@@ -852,6 +879,7 @@ if (loadAuditPattern.test(content)) {
             getFullAuditRef: () => \\\`\\\${type}:\\\${auditContext.auditId}\\\`,
             getAuditedAt: () => new Date().toISOString(),
             getSiteId: () => siteId,
+            getAuditResult: () => auditResult,
             // Add other methods as needed
           };
         } else {
@@ -985,6 +1013,19 @@ else
 fi
 
 echo ""
+echo "📂 Setting up broken links data (for Step 2)..."
+# Copy broken-links JSON files into the BUILD directory so Docker can access them
+# This allows Step 2 of broken-internal-links to load the data from Step 1
+BROKEN_LINKS_FILES="$SPACECAT_TOOLS_DIR/local-data/broken-links-*.json"
+if ls $BROKEN_LINKS_FILES 1> /dev/null 2>&1; then
+    echo "   Found broken links JSON files in local-data/"
+    cp $BROKEN_LINKS_FILES "$BUILD_DIR/" 2>/dev/null || true
+    echo "   ✅ Broken links data copied to build directory"
+else
+    echo "   ℹ️  No broken links JSON files found (run fetch-broken-links.sh first for Step 2)"
+fi
+
+echo ""
 echo "📝 Creating env.json for SAM..."
 
 # Determine if we should use local top pages based on audit type and user choice
@@ -996,12 +1037,12 @@ if [[ "$NEW_AUDIT_TYPE" == "canonical" ]] || [[ "$NEW_AUDIT_TYPE" == "hreflang" 
     # For canonical/hreflang, check if user chose to use local URLs
     if [[ ! "$USE_LOCAL_URLS" =~ ^[Nn] ]]; then
         USE_LOCAL_TOP_PAGES_VALUE="true"
-        TOP_PAGES_FILE_VALUE="$SCRIPT_DIR/urls-to-scrape.txt"
+        TOP_PAGES_FILE_VALUE="$SCRIPT_DIR/local-data/urls-to-scrape.txt"
     fi
 elif [[ "$NEW_AUDIT_TYPE" == "structured-data" ]]; then
     # structured-data always needs top pages for local testing
     USE_LOCAL_TOP_PAGES_VALUE="true"
-    TOP_PAGES_FILE_VALUE="$SCRIPT_DIR/urls-to-scrape.txt"
+    TOP_PAGES_FILE_VALUE="$SCRIPT_DIR/local-data/urls-to-scrape.txt"
 fi
 
 cat > "$AUDIT_WORKER_DIR/env.json" <<EOF
@@ -1066,10 +1107,14 @@ if [ -d "$BUILD_DIR" ]; then
     cp "$AUDIT_WORKER_DIR/local-config.json" "$BUILD_DIR/local-config.json"
     echo "✅ Copied local-config.json to build directory"
     
-    # Copy urls-to-scrape.txt if it exists
+    # Copy urls-to-scrape.txt if it exists (for audits that need top pages)
+    # Try the configured path first, then fall back to local-data/
     if [ -f "$TOP_PAGES_FILE_VALUE" ]; then
         cp "$TOP_PAGES_FILE_VALUE" "$BUILD_DIR/urls-to-scrape.txt"
         echo "✅ Copied urls-to-scrape.txt to build directory"
+    elif [ -f "$SCRIPT_DIR/local-data/urls-to-scrape.txt" ]; then
+        cp "$SCRIPT_DIR/local-data/urls-to-scrape.txt" "$BUILD_DIR/urls-to-scrape.txt"
+        echo "✅ Copied urls-to-scrape.txt from local-data/ to build directory"
         
         # Update config to point to the local copy inside the container
         cat > "$BUILD_DIR/local-config.json" <<EOF
@@ -1081,7 +1126,7 @@ if [ -d "$BUILD_DIR" ]; then
 EOF
         echo "✅ Updated config to use relative path for urls-to-scrape.txt"
     else
-        echo "⚠️  WARNING: urls-to-scrape.txt not found at $TOP_PAGES_FILE_VALUE"
+        echo "⚠️  WARNING: local-data/urls-to-scrape.txt not found at $TOP_PAGES_FILE_VALUE"
     fi
 else
     echo "⚠️  WARNING: Build directory not found, config may not be accessible"

@@ -8,10 +8,8 @@ spacecat-config.sh
 *.bak
 *.backup
 
-# Local testing data
-urls-to-scrape.txt
-broken-links-*.json
-broken-links-output.txt
+# Local testing data (all generated files go in local-data/)
+local-data/
 
 # macOS
 .DS_Store
