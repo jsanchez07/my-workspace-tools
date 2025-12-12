@@ -23,10 +23,13 @@ Fetches the top 200 pages for a site from the SpaceCat API and saves them to `ur
 
 Saves the top 200 pages to:
 ```
-~/Documents/GitHub/SPACECAT/my-workspace-tools/urls-to-scrape.txt
+~/Documents/GitHub/SPACECAT/my-workspace-tools/local-data/urls-to-scrape.txt
 ```
 
-This file is used by `run-scraper.sh` to know which URLs to scrape.
+This file is used by:
+- `run-scraper.sh` - to know which URLs to scrape
+- `canonical` and `hreflang` audits - as the list of URLs to validate
+- Other audits - as the list of alternative URLs for suggestions
 
 ## Usage Flow
 
@@ -43,7 +46,7 @@ This file is used by `run-scraper.sh` to know which URLs to scrape.
 
 ## Output Format
 
-The `urls-to-scrape.txt` file contains one URL per line:
+The `local-data/urls-to-scrape.txt` file contains one URL per line:
 ```
 https://example.com/page1
 https://example.com/page2
@@ -53,7 +56,7 @@ https://example.com/page3
 
 ## Manual Editing
 
-You can manually edit `urls-to-scrape.txt` to:
+You can manually edit `local-data/urls-to-scrape.txt` to:
 - Add more URLs
 - Remove URLs you don't want to scrape
 - Add comments (lines starting with `#` are ignored)

@@ -130,37 +130,32 @@ export const main = async () => {
     // Mock SQS to prevent "QueueDoesNotExist" errors for multi-step audits locally
     sqs: {
       sendMessage: async (queueUrl, payload) => {
-        console.log('🔧 [MOCK SQS] sendMessage called (suppressed for local testing)');
-        console.log(`   Queue URL: ${queueUrl}`);
-        console.log(`   Payload type: ${payload?.type || 'unknown'}`);
+        const payloadType = payload?.type || 'unknown';
         
-        // Log the broken links payload to see if urlsSuggested is populated
-        if (payload?.type === 'guidance:broken-links' && payload?.data) {
-          const { brokenLinks, alternativeUrls } = payload.data;
-          console.log(`   📊 Total broken links in payload: ${brokenLinks?.length || 0}`);
-          console.log(`   📊 Total alternative URLs in payload: ${alternativeUrls?.length || 0}`);
-          
-          if (alternativeUrls && alternativeUrls.length > 0) {
-            console.log(`   📋 Sample alternative URLs (first 3):`);
-            alternativeUrls.slice(0, 3).forEach((url, i) => {
-              console.log(`      ${i + 1}. ${url}`);
-            });
-          } else {
-            console.log(`   ⚠️  NO ALTERNATIVE URLs - This is the problem!`);
-          }
-          
-          // Log first 3 broken links to see if urlsSuggested is populated
-          console.log(`\n   📋 Sample broken links (first 3):`);
-          brokenLinks.slice(0, 3).forEach((link, index) => {
-            console.log(`   ${index + 1}. urlFrom: ${link.urlFrom}`);
-            console.log(`      urlTo: ${link.urlTo}`);
-            console.log(`      urlsSuggested: [${link.urlsSuggested?.length || 0} URLs]`);
-            if (link.urlsSuggested && link.urlsSuggested.length > 0) {
-              console.log(`         → ${link.urlsSuggested.slice(0, 2).join(', ')}${link.urlsSuggested.length > 2 ? ', ...' : ''}`);
-            }
-          });
-          console.log('');
+        // Initialize counter if not exists
+        if (!context._sqsMessageCounts) {
+          context._sqsMessageCounts = new Map();
         }
+        
+        const currentCount = context._sqsMessageCounts.get(payloadType) || 0;
+        context._sqsMessageCounts.set(payloadType, currentCount + 1);
+        
+        // Only log detailed info for specific payload types or first occurrence
+        if (payloadType === 'guidance:broken-links' && payload?.data) {
+          // Summary logging for broken-links (useful for debugging)
+          const { brokenLinks, alternativeUrls } = payload.data;
+          console.log('🔧 [MOCK SQS] Sending broken-links to Mystique AI (suppressed for local testing)');
+          console.log(`   📊 Total broken links: ${brokenLinks?.length || 0}`);
+          console.log(`   📊 Total alternative URLs: ${alternativeUrls?.length || 0}`);
+          
+          if (!alternativeUrls || alternativeUrls.length === 0) {
+            console.log(`   ⚠️  NO ALTERNATIVE URLs - AI suggestions may be limited!`);
+          }
+        } else if (currentCount === 0) {
+          // First message of this type - log it
+          console.log(`🔧 [MOCK SQS] Sending ${payloadType} messages to Mystique AI (suppressed for local testing)`);
+        }
+        // Subsequent messages of same type are silently counted
         
         // Don't actually send - just return success
         return { MessageId: '00000000-0000-0000-0000-000000000000' };
@@ -347,16 +342,18 @@ export const main = async () => {
   if (USE_LOCAL_TOP_PAGES) {
     console.log('🔧 [LOCAL TEST MODE] Using local top pages from urls-to-scrape.txt');
 
-    console.log(`📂 Top pages file: ${TOP_PAGES_FILE}`);
+    // Use container path instead of local filesystem path
+    const containerTopPagesPath = '/var/task/urls-to-scrape.txt';
+    console.log(`📂 Top pages file (container path): ${containerTopPagesPath}`);
 
     try {
-      const urlsContent = fs.readFileSync(TOP_PAGES_FILE, 'utf8');
+      const urlsContent = fs.readFileSync(containerTopPagesPath, 'utf8');
       const localTopPagesUrls = urlsContent
         .split('\n')
         .map((line) => line.trim())
         .filter((line) => line && !line.startsWith('#'));
 
-      console.log(`✅ [LOCAL TEST MODE] Loaded ${localTopPagesUrls.length} URLs from ${TOP_PAGES_FILE}`);
+      console.log(`✅ [LOCAL TEST MODE] Loaded ${localTopPagesUrls.length} URLs from ${containerTopPagesPath}`);
 
       // Mock dataAccess for SiteTopPage and Site
       if (!context.dataAccess) {
@@ -585,6 +582,49 @@ export const main = async () => {
     };
     
     console.log('✅ [MOCK RUM] RUM API client mock installed with automatic domain key injection');
+  }
+
+  // ============================================================================
+  // MOCK GENVAR AI CLIENT (for meta-tags audit)
+  // ============================================================================
+  // The GenvarClient is used by the meta-tags audit to generate AI suggestions.
+  // Since the Genvar API requires presigned S3 URLs (which don't work locally),
+  // we mock the client to return empty suggestions, similar to Mystique AI.
+  if (!context.genvarClient) {
+    console.log('🔧 [LOCAL TEST MODE] Creating mock Genvar AI client');
+    context.genvarClient = {
+      generateSuggestions: async (requestBody, endpoint) => {
+        console.log('🔧 [MOCK GENVAR] generateSuggestions called');
+        console.log(`   Endpoint: ${endpoint}`);
+        console.log(`   ℹ️  AI suggestions are not available for local testing`);
+        console.log(`   ℹ️  Returning original detected tags without AI enhancements`);
+        
+        // Parse the request body to extract detectedTags
+        let parsedBody;
+        try {
+          parsedBody = JSON.parse(requestBody);
+        } catch (e) {
+          console.error('❌ [MOCK GENVAR] Could not parse request body:', e.message);
+          return {};
+        }
+        
+        // Return the detected tags structure without AI suggestions
+        // This allows the audit to complete without external AI service
+        const { detectedTags } = parsedBody;
+        
+        // Convert presigned URLs back to endpoint keys
+        const result = {};
+        for (const [endpoint, presignedUrl] of Object.entries(detectedTags || {})) {
+          // Return empty tags structure for each endpoint
+          result[endpoint] = {};
+        }
+        
+        console.log(`   Returning empty suggestions for ${Object.keys(result).length} endpoints`);
+        return result;
+      },
+    };
+    
+    console.log('✅ [MOCK GENVAR] Genvar AI client mock installed (returns empty suggestions)');
   }
 
   // ============================================================================

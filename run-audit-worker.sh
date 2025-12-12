@@ -22,6 +22,30 @@ cleanup_on_exit() {
         echo "✅ step-audit.js restored"
     fi
     
+    # Restore audit-utils.js if it was patched
+    if [ -f "src/common/audit-utils.js.backup" ]; then
+        echo ""
+        echo "🔄 Restoring audit-utils.js (cleanup)..."
+        mv src/common/audit-utils.js.backup src/common/audit-utils.js
+        echo "✅ audit-utils.js restored"
+    fi
+    
+    # Restore getPresignedUrl.js if it was patched
+    if [ -f "src/utils/getPresignedUrl.js.backup" ]; then
+        echo ""
+        echo "🔄 Restoring getPresignedUrl.js (cleanup)..."
+        mv src/utils/getPresignedUrl.js.backup src/utils/getPresignedUrl.js
+        echo "✅ getPresignedUrl.js restored"
+    fi
+    
+    # Restore metatags-auto-suggest.js if it was patched
+    if [ -f "src/metatags/metatags-auto-suggest.js.backup" ]; then
+        echo ""
+        echo "🔄 Restoring metatags-auto-suggest.js (cleanup)..."
+        mv src/metatags/metatags-auto-suggest.js.backup src/metatags/metatags-auto-suggest.js
+        echo "✅ metatags-auto-suggest.js restored"
+    fi
+    
     # Clean up temporary files
     rm -f src/indexlocal.js 2>/dev/null
     rm -f template-local.yml 2>/dev/null
@@ -955,6 +979,119 @@ if (pattern.test(content)) {
     echo ""
 fi
 
+# ═══════════════════════════════════════════════════════════════
+# PATCH getPresignedUrl for local testing (meta-tags audit)
+# ═══════════════════════════════════════════════════════════════
+echo "🔧 Patching getPresignedUrl.js for local testing..."
+
+PRESIGNED_URL_FILE="$AUDIT_WORKER_DIR/src/utils/getPresignedUrl.js"
+
+if [ ! -f "$PRESIGNED_URL_FILE" ]; then
+    echo "⚠️  WARNING: getPresignedUrl.js not found, skipping patch"
+else
+    # Backup the file
+    cp "$PRESIGNED_URL_FILE" "$PRESIGNED_URL_FILE.backup"
+    
+    # Patch to return mock URLs instead of calling AWS SDK
+    node -e '
+const fs = require("fs");
+let content = fs.readFileSync("'"$PRESIGNED_URL_FILE"'", "utf8");
+
+// Find the try block and add early return right after the opening brace of the function
+// Match the function signature more flexibly
+const pattern = /(\}\) \{\s*)(try \{)/;
+
+if (pattern.test(content)) {
+  content = content.replace(
+    pattern,
+    "$1" +
+    "// LOCAL TESTING: Return mock URL for local testing\n" +
+    "  if (log) {\n" +
+    "    log.debug(\"[LOCAL TEST MODE] Generating mock presigned URL\");\n" +
+    "  }\n" +
+    "  const encodedKey = encodeURIComponent(key);\n" +
+    "  const mockUrl = \"https://mock-s3.amazonaws.com/\" + bucket + \"/\" + encodedKey + \"?mock=true\";\n" +
+    "  return mockUrl;\n" +
+    "  \n" +
+    "  // eslint-disable-next-line no-unreachable\n" +
+    "  $2"
+  );
+  
+  fs.writeFileSync("'"$PRESIGNED_URL_FILE"'", content);
+  console.log("✅ Patched getPresignedUrl to return mock URLs for local testing");
+} else {
+  console.log("⚠️  Pattern not found - getPresignedUrl.js may have changed");
+  console.log("   Presigned URL generation may fail");
+}
+'
+    
+    if [ $? -ne 0 ]; then
+        echo "❌ Error patching getPresignedUrl.js"
+        mv "$PRESIGNED_URL_FILE.backup" "$PRESIGNED_URL_FILE" 2>/dev/null
+        exit 1
+    fi
+    echo ""
+fi
+
+# ═══════════════════════════════════════════════════════════════
+# PATCH metatagsAutoSuggest to skip Genvar AI for local testing
+# ═══════════════════════════════════════════════════════════════
+echo "🔧 Patching metatags-auto-suggest.js for local testing..."
+
+AUTO_SUGGEST_FILE="$AUDIT_WORKER_DIR/src/metatags/metatags-auto-suggest.js"
+
+if [ ! -f "$AUTO_SUGGEST_FILE" ]; then
+    echo "⚠️  WARNING: metatags-auto-suggest.js not found, skipping patch"
+else
+    # Backup the file
+    cp "$AUTO_SUGGEST_FILE" "$AUTO_SUGGEST_FILE.backup"
+    
+    # Patch to skip Genvar AI calls for local testing
+    # Inject conditional to use mock genvarClient if it exists
+    node -e '
+const fs = require("fs");
+let content = fs.readFileSync("'"$AUTO_SUGGEST_FILE"'", "utf8");
+
+// Find the try block where genvarClient is created and replace it with conditional logic
+const pattern = /(let responseWithSuggestions;\s*try \{\s*)(const genvarClient = GenvarClient\.createFrom\(context\);)/;
+
+if (pattern.test(content)) {
+  content = content.replace(
+    pattern,
+    "$1" +
+    "// LOCAL TESTING: Use mock genvarClient if it exists\n" +
+    "    let genvarClient;\n" +
+    "    if (context.genvarClient) {\n" +
+    "      log.info(\"[LOCAL TEST MODE] Using mock Genvar AI client\");\n" +
+    "      log.info(\"   Returning detected tags without AI enhancements\");\n" +
+    "      genvarClient = context.genvarClient;\n" +
+    "    } else {\n" +
+    "      genvarClient = GenvarClient.createFrom(context);\n" +
+    "    }\n" +
+    "    \n" +
+    "    // If using mock client, skip AI and return detected tags\n" +
+    "    if (context.genvarClient) {\n" +
+    "      return detectedTags;\n" +
+    "    }\n" +
+    "    "
+  );
+  
+  fs.writeFileSync("'"$AUTO_SUGGEST_FILE"'", content);
+  console.log("✅ Patched metatagsAutoSuggest to use mock Genvar client for local testing");
+} else {
+  console.log("⚠️  Pattern not found - metatags-auto-suggest.js may have changed");
+  console.log("   Genvar AI calls may fail");
+}
+'
+    
+    if [ $? -ne 0 ]; then
+        echo "❌ Error patching metatags-auto-suggest.js"
+        mv "$AUTO_SUGGEST_FILE.backup" "$AUTO_SUGGEST_FILE" 2>/dev/null
+        exit 1
+    fi
+    echo ""
+fi
+
 # Clean up old output.txt
 if [ -f "output.txt" ]; then
     echo "🗑️  Cleaning up old output.txt..."
@@ -1064,6 +1201,13 @@ cat > "$AUDIT_WORKER_DIR/env.json" <<EOF
     "SLACK_OPS_CHANNEL_WORKSPACE": "${SLACK_OPS_CHANNEL_WORKSPACE:-}",
     "SLACK_REPORT_CHANNEL_ID": "${SLACK_REPORT_CHANNEL_ID:-}",
     "SQS_QUEUE_URL": "${SQS_QUEUE_URL:-}",
+    "GENVAR_HOST": "${GENVAR_HOST:-https://mock-genvar-api.local}",
+    "GENVAR_IMS_ORG_ID": "${GENVAR_IMS_ORG_ID:-mock-org@AdobeOrg}",
+    "GENVAR_API_POLL_INTERVAL": "1000",
+    "IMS_HOST": "${IMS_HOST:-ims-na1.adobelogin.com}",
+    "IMS_CLIENT_ID": "${IMS_CLIENT_ID:-mock-client-id}",
+    "IMS_CLIENT_CODE": "${IMS_CLIENT_CODE:-mock-client-code}",
+    "IMS_CLIENT_SECRET": "${IMS_CLIENT_SECRET:-mock-client-secret}",
     "USE_LOCAL_SCRAPER_DATA": "$NEW_USE_LOCAL",
     "USE_LOCAL_TOP_PAGES": "$USE_LOCAL_TOP_PAGES_VALUE",
     "TOP_PAGES_FILE": "$TOP_PAGES_FILE_VALUE"
@@ -1154,15 +1298,15 @@ echo ""
 
 # Run SAM using the BUILT template (not source template)
 # This ensures env vars from env.json are properly applied
-# Filter out X-Ray related errors and orphaned stack traces at shell level
-sam local invoke \
-  --template .aws-sam/build/template.yaml \
-  SpacecatAuditWorkerFunction \
-  --env-vars "$AUDIT_WORKER_DIR/env.json" \
-  2>&1 | grep -v -E \
-  "(\
+  # Filter out X-Ray related errors and orphaned stack traces at shell level
+  sam local invoke \
+    --template .aws-sam/build/template.yaml \
+    SpacecatAuditWorkerFunction \
+    --env-vars "$AUDIT_WORKER_DIR/env.json" \
+    2>&1 | grep -v -E \
+    "(\
 ^.*(getTraceId|log-wrapper\.js|xray\.js|Missing AWS Lambda trace data|aws-xray-sdk).*\
-|^\s+at (getTraceId|tracingFetch|validateCanonicalTag|validateCanonicalRecursively|validatePageHreflang)\
+|^\s+at (getTraceId|tracingFetch|validateCanonicalTag|validateCanonicalRecursively|validatePageHreflang|isLinkInaccessible|internalLinksAuditRunner|followAnyRedirectForUrl|processEntriesInParallel|processEntries|countRedirects|getJsonData|processRedirectsFile)\
 |^\s+at (fetchContent|checkRobotsForSitemap|getSitemapUrls|findSitemap|checkSitemap|getBaseUrlPagesFromSitemaps|fetchWithHeadFallback|checkUrl|filterValidUrls)\
 |^\s+at file:\/\/\/var\/task\/(src|node_modules)\/.*\.js:[0-9]+:[0-9]+\
 |^\s+at (limitConcurrencyAllSettled|limitConcurrency|async |process\.processTicksAndRejections)\
@@ -1171,7 +1315,7 @@ sam local invoke \
 |^\s+at Array\.map\
 |^\s+at \/var\/task\/node_modules\/@smithy\/\
 )" \
-  > output.txt
+    > output.txt
 
 echo ""
 echo "✅ Audit completed! Output saved to output.txt"
@@ -1221,6 +1365,16 @@ fi
 if [ -f "src/common/audit-utils.js.backup" ]; then
     mv src/common/audit-utils.js.backup src/common/audit-utils.js
     echo "✅ Restored audit-utils.js to original state"
+fi
+
+if [ -f "src/utils/getPresignedUrl.js.backup" ]; then
+    mv src/utils/getPresignedUrl.js.backup src/utils/getPresignedUrl.js
+    echo "✅ Restored getPresignedUrl.js to original state"
+fi
+
+if [ -f "src/metatags/metatags-auto-suggest.js.backup" ]; then
+    mv src/metatags/metatags-auto-suggest.js.backup src/metatags/metatags-auto-suggest.js
+    echo "✅ Restored metatags-auto-suggest.js to original state"
 fi
 
 echo "✅ Cleaned up temporary files"

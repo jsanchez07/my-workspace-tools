@@ -3,13 +3,11 @@
 ## Quick Start
 
 ```bash
-# 1. Load AWS credentials (from KLAM)
-$(curl -s 'https://klam.corp.adobe.com/pastebin/?id=YOUR_ID_HERE')
-
-# 2. Run an audit
 cd ~/Documents/GitHub/SPACECAT/my-workspace-tools
 ./run-audit-worker.sh
 ```
+
+**Note:** AWS credentials are **NOT required** for local testing. All AWS services are mocked.
 
 ## Running Audits
 
@@ -25,23 +23,35 @@ The script is **interactive** and will prompt you for:
 
 ## Audit Types
 
-### Audits That Work Fully Offline with Local Scraper Data
+### Audits Using Local Scraper Data (Offline)
 These audits use local scraper results and work completely offline:
-- `meta-tags` - Meta tags analysis ✅ RECOMMENDED FOR LOCAL TESTING
-- `product-metatags` - Product meta tags
-- `structured-data` - Schema.org data
+- `canonical` - Validates canonical tags ✅
+- `hreflang` - Validates hreflang tags ✅
+- `meta-tags` - Meta tags analysis ✅ (Note: AI suggestions skipped locally)
+- `structured-data` - Schema.org validation ✅ (Note: AI suggestions skipped locally)
 
-### Audits That Require Network Access
-These audits fetch live URLs and need network access:
-- `canonical` - Validates canonical tags by fetching live pages
-- `hreflang` - Uses `fetch()` to retrieve pages from web
-- `404` - Checks for broken links
-- `sitemap` - Downloads sitemap.xml
-- `accessibility` - Runs live accessibility checks
-- `lhs-mobile` - Lighthouse mobile (requires live page)
-- `lhs-desktop` - Lighthouse desktop (requires live page)
+### Audits Fetching Live Data (Network Required)
+These audits fetch data from live websites:
+- `sitemap` - Downloads and validates sitemap.xml ✅
+- `redirect-chains` - Validates redirects.json file ✅
 
-**Note**: Network audits may show CSS parsing errors when fetching complex pages. For pure offline testing, use audits from the first category.
+### Multi-Step Audits (Special Workflow)
+- `broken-internal-links` - Requires 2 steps:
+  1. Run `./fetch-broken-links.sh` to fetch RUM data (requires RUM domain key)
+  2. Run `./run-audit-worker.sh` and select `broken-internal-links`
+  - Note: AI suggestions are skipped locally (would require Mystique AI service)
+
+### Requirements Summary
+
+| Audit | Requires | Data Source | AI Suggestions |
+|-------|----------|-------------|----------------|
+| `canonical` | Local scraper data | `local-data/urls-to-scrape.txt` | N/A |
+| `hreflang` | Local scraper data | `local-data/urls-to-scrape.txt` | N/A |
+| `meta-tags` | Local scraper data | Scraper files | Skipped (would need Genvar AI) |
+| `structured-data` | Local scraper data | Scraper files | Skipped (would need Mystique AI) |
+| `sitemap` | Network access | Live website | N/A |
+| `redirect-chains` | Network access | Live website | N/A |
+| `broken-internal-links` | RUM domain key | RUM API | Skipped (would need Mystique AI) |
 
 ## What the Script Does
 
@@ -55,6 +65,7 @@ These audits fetch live URLs and need network access:
 
 ## Output
 
+### Audit Results
 Results saved to:
 ```
 ~/Documents/GitHub/SPACECAT/spacecat-audit-worker/output.txt
@@ -62,34 +73,54 @@ Results saved to:
 
 Script clears this file before each run (no old output confusion).
 
+The output is **filtered** to remove:
+- AWS X-Ray traces
+- Orphaned Node.js stack traces
+- Verbose SQS messages
+
+You'll see clean, relevant audit results and suggestions.
+
+### Generated Data Files
+All generated test data is in:
+```
+~/Documents/GitHub/SPACECAT/my-workspace-tools/local-data/
+```
+
+See `local-data/README.md` for details on what each file contains.
+
 ## Requirements
 
-1. **AWS Credentials**: Must be loaded in your terminal
-   ```bash
-   $(curl -s 'https://klam.corp.adobe.com/pastebin/?id=...')
-   ```
+### For Scraper-Based Audits (canonical, hreflang, meta-tags, structured-data)
 
-2. **Scraper Data** (if using local mode for meta-tags audits):
-   ```bash
-   cd ~/Documents/GitHub/SPACECAT/my-workspace-tools
-   ./run-scraper.sh
-   ```
-
-3. **Top Pages URL List** (if running canonical/hreflang locally):
+1. **Top Pages URL List**:
    ```bash
    cd ~/Documents/GitHub/SPACECAT/my-workspace-tools
    ./get-top-pages.sh
    ```
+   This creates `local-data/urls-to-scrape.txt`
 
-4. **Matching Site ID**: When using local data, audit Site ID must match scraper's SITE_ID
+2. **Scraper Data**:
+   ```bash
+   ./run-scraper.sh
+   ```
+   This scrapes the URLs and saves data for audits to use
+
+3. **Matching Site ID**: When using local data, audit Site ID must match scraper's SITE_ID
+
+### For Broken Internal Links Audit
+
+1. **RUM Domain Key**: Get from RUM API key generator
+2. **Fetch Broken Links Data**:
+   ```bash
+   ./fetch-broken-links.sh
+   ```
+   This creates `local-data/broken-links-{SITE_ID}.json` for the audit to use
+
+### For Live Data Audits (sitemap, redirect-chains)
+
+- **Network Access**: These fetch data directly from the website (no setup needed)
 
 ## Troubleshooting
-
-### "No AWS credentials!"
-```bash
-# Load credentials first
-$(curl -s 'https://klam.corp.adobe.com/pastebin/?id=...')
-```
 
 ### "No local scraper data found"
 ```bash
@@ -98,15 +129,26 @@ cd ~/Documents/GitHub/SPACECAT/my-workspace-tools
 ./run-scraper.sh
 ```
 
+### "urls-to-scrape.txt not found"
+```bash
+# Get top pages first
+./get-top-pages.sh
+```
+
 ### Site ID mismatch
 The scraper's `local.js` file contains the `SITE_ID`. Make sure it matches what you use in the audit.
 
-### Credentials expired mid-run
-Reload them and run again:
-```bash
-$(curl -s 'https://klam.corp.adobe.com/pastebin/?id=...')
-./run-audit-worker.sh
+### Site ID not in mock map
+If using a new site, add it to `index-local.js`:
+```javascript
+const siteUrlMap = {
+  'your-site-id-here': 'https://your-site-url.com',
+  // ... other sites
+};
 ```
+
+### Broken-internal-links audit fails at Step 2
+Make sure you ran `./fetch-broken-links.sh` first to generate the required `broken-links-{SITE_ID}.json` file.
 
 ## How Patching Works
 
@@ -144,10 +186,12 @@ git status
 
 ## Tips
 
-- **Canonical/Hreflang audits**: Use local URL list from `urls-to-scrape.txt`
-- **Meta-tags audits**: Use local scraper data (`true`)
-- **Keep changes**: Say "y" to persist your audit config in `index-local.js`
-- **Revert changes**: Say "n" to restore original
+- **Most audits work offline**: No AWS credentials needed!
+- **Broken-internal-links**: Run `fetch-broken-links.sh` first
+- **Live data audits** (sitemap, redirect-chains): Just need network access
+- **AI suggestions**: Skipped locally for meta-tags, structured-data, and broken-internal-links (would require production AI services)
+- **Adding new sites**: Add Site ID to `siteUrlMap` in `index-local.js`
+- **Clean output**: Verbose logs are automatically filtered out
 
 ---
 

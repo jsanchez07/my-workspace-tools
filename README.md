@@ -21,6 +21,11 @@ Quick reference for running SpaceCat audits and scraping locally.
 ./run-scraper.sh            # 2. Scrape pages
 ```
 
+### Fetch RUM Data (for broken-internal-links audit)
+```bash
+./fetch-broken-links.sh     # Fetch broken links from RUM API
+```
+
 ### Utilities
 ```bash
 ./open-scrape-results.sh    # View scraped data in browser
@@ -33,15 +38,24 @@ No manual commands needed! The scripts automatically:
 
 ## 📋 Complete Workflow
 
+### For Most Audits (using local scraper data)
 ```bash
-# 1. Load AWS credentials
-$(curl -s 'https://klam.corp.adobe.com/pastebin/?id=YOUR_ID_HERE')
-
-# 2. Get top pages → scrape → audit
+# 1. Get top pages → scrape → audit
 ./get-top-pages.sh
 ./run-scraper.sh
 ./run-audit-worker.sh
 ```
+
+### For Broken Internal Links Audit
+```bash
+# 1. Fetch broken links from RUM
+./fetch-broken-links.sh     # Requires RUM domain key
+
+# 2. Run the audit
+./run-audit-worker.sh       # Select: broken-internal-links
+```
+
+**Note:** AWS credentials are **NOT required** for local testing. All AWS services (DynamoDB, S3, SQS) are mocked locally.
 
 ## ⚙️ Setup & Configuration
 
@@ -66,7 +80,10 @@ This creates `spacecat-config.sh` with your local paths. This file is **not trac
 
 **NOT Tracked (user-specific, auto-generated):**
 - **`spacecat-config.sh`** - Your personal paths (created by setup script)
-- **`urls-to-scrape.txt`** - URLs you're testing with
+- **`local-data/`** - Generated test data (see `local-data/README.md`)
+  - `urls-to-scrape.txt` - URLs for audits
+  - `broken-links-*.json` - RUM broken links data
+  - `broken-links-*.txt` - Human-readable output
 
 ### Shell Functions (Optional)
 
