@@ -36,7 +36,10 @@ source "$CONFIG_FILE"
 source "$SCRIPT_DIR/config-helpers.sh"
 
 SCRAPER_DIR="$SPACECAT_SCRAPER_DIR"
-URL_FILE="$SPACECAT_TOOLS_DIR/urls-to-scrape.txt"
+URL_FILE="$SPACECAT_TOOLS_DIR/local-data/urls-to-scrape.txt"
+
+# Ensure local-data directory exists
+mkdir -p "$SPACECAT_TOOLS_DIR/local-data"
 
 # ============================================================================
 # SYNC: Copy master local.js from central repo to scraper
@@ -66,10 +69,13 @@ if [ $# -eq 0 ]; then
         echo "Error: No URLs provided and $URL_FILE not found"
         echo ""
         echo "Usage:"
-        echo "  1. Edit urls-to-scrape.txt and add URLs (one per line)"
+        echo "  1. Run ./get-top-pages.sh to fetch top pages (saves to local-data/urls-to-scrape.txt)"
         echo "     Then run: $0"
         echo ""
-        echo "  2. Or pass URLs as arguments:"
+        echo "  2. Or manually edit local-data/urls-to-scrape.txt and add URLs (one per line)"
+        echo "     Then run: $0"
+        echo ""
+        echo "  3. Or pass URLs as arguments:"
         echo "     $0 https://example.com https://example.com/page2"
         exit 1
     fi

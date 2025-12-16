@@ -18,8 +18,11 @@ source "$CONFIG_FILE"
 
 # Configuration
 API_URL="https://spacecat.experiencecloud.live/api/ci/sites"
-URLS_FILE="$SPACECAT_TOOLS_DIR/urls-to-scrape.txt"
+URLS_FILE="$SPACECAT_TOOLS_DIR/local-data/urls-to-scrape.txt"
 TEMP_FILE="/tmp/top-pages.json"
+
+# Ensure local-data directory exists
+mkdir -p "$SPACECAT_TOOLS_DIR/local-data"
 
 # Try to get API key from config or environment
 API_KEY="${SPACECAT_API_KEY:-}"

@@ -31,10 +31,10 @@ The scraper needs a **list of URLs to scrape**. You can get them from:
 ./get-top-pages.sh
 ```
 
-This fetches the top 200 pages from SpaceCat API and saves them to `urls-to-scrape.txt`.
+This fetches the top 200 pages from SpaceCat API and saves them to `local-data/urls-to-scrape.txt`.
 
 ### Option 2: Manual URL List
-Edit `urls-to-scrape.txt` and add URLs (one per line):
+Edit `local-data/urls-to-scrape.txt` and add URLs (one per line):
 ```
 https://example.com/page1
 https://example.com/page2
@@ -100,13 +100,13 @@ When you run the scraper with a Site ID that already has data, you'll be asked:
 
 ## Troubleshooting
 
-### "No URLs found in urls-to-scrape.txt"
+### "No URLs found in local-data/urls-to-scrape.txt"
 Run the top 200 pages script first:
 ```bash
 ./get-top-pages.sh
 ```
 
-Or manually add URLs to `urls-to-scrape.txt`.
+Or manually add URLs to `local-data/urls-to-scrape.txt`.
 
 ### Site ID mismatch in audit
 The scraper and audit must use the **same SITE_ID**. Check:
