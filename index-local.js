@@ -23,6 +23,12 @@ import { main as universalMain } from './index.js';
 // When addSuggestions is called, cache them so allByOpportunityIdAndStatus can return them
 const suggestionCache = new Map(); // key: opportunityId, value: array of suggestion objects
 
+// Site URL mapping (used by both Site and RUM mocks)
+const siteUrlMap = {
+  '1db7b770-db7f-4c52-a9dc-6e05add6c11e': 'https://www.asianpaints.com',
+  'cccdac43-1a22-4659-9086-b762f59b9928': 'https://www.bulk.com',
+};
+
 // Read configuration from local-config.json (fallback) or environment variables
 let localConfig = {};
 try {
@@ -576,7 +582,34 @@ export const main = async () => {
       },
       retrieveDomainkey: async (domain) => {
         console.log(`🔧 [MOCK RUM] retrieveDomainkey called for domain: ${domain}`);
-        console.log(`🔧 [MOCK RUM] Returning injected domain key`);
+        
+        // For local testing, we need to simulate the real API's behavior:
+        // The key is tied to a specific domain, so we should validate.
+        // Since we don't know which domain the key was generated for,
+        // we'll check if the domain matches the site's base URL.
+        // If not, throw an error to trigger the fallback logic in wwwUrlResolver.
+        
+        // Get the base URL from the Site mock's siteUrlMap
+        const siteId = localConfig.siteId || messageBody.siteId;
+        const expectedBaseUrl = siteUrlMap[siteId];
+        
+        if (expectedBaseUrl) {
+          // Extract domain from base URL (remove protocol)
+          const expectedDomain = expectedBaseUrl.replace(/^https?:\/\//, '');
+          
+          // Check if the requested domain matches
+          if (domain === expectedDomain) {
+            console.log(`🔧 [MOCK RUM] ✅ Domain matches base URL, returning key`);
+            return process.env.RUM_DOMAIN_KEY;
+          } else {
+            // Domain doesn't match - throw error to trigger fallback
+            console.log(`🔧 [MOCK RUM] ❌ Domain '${domain}' doesn't match expected '${expectedDomain}'`);
+            throw new Error(`RUM domain key validation failed for ${domain}`);
+          }
+        }
+        
+        // Fallback: if we can't determine the expected domain, just return the key
+        console.log(`🔧 [MOCK RUM] ⚠️  Cannot determine expected domain, returning key anyway`);
         return process.env.RUM_DOMAIN_KEY;
       },
     };
@@ -641,11 +674,6 @@ export const main = async () => {
         console.log(`🔧 [MOCK DynamoDB] Site.findById called with siteId: ${siteId}`);
 
         // Map known site IDs to their base URLs
-        const siteUrlMap = {
-          '1db7b770-db7f-4c52-a9dc-6e05add6c11e': 'https://www.asianpaints.com',
-          'cccdac43-1a22-4659-9086-b762f59b9928': 'https://www.bulk.com',
-        };
-        
         const baseURL = siteUrlMap[siteId] || 'https://example.com';
         console.log(`   Using base URL: ${baseURL}`);
 

@@ -335,8 +335,10 @@ export RUM_DOMAIN_KEY="$RUM_DOMAIN_KEY"
 echo "🚀 Fetching broken links from RUM API..."
 echo "   (This may take a minute...)"
 echo ""
-echo "⚠️  NOTE: You may see an SQS error at the end - this is expected!"
-echo "   We only need Step 1's output (RUM data), not Steps 2-3."
+echo "⚠️  NOTE: You may see some expected errors in the logs:"
+echo "   • 'Could not retrieved RUM domainkey' - This is the fallback mechanism"
+echo "   • 'The specified queue does not exist' - Expected for local testing"
+echo "   These are NOT failures - the script will confirm if data was retrieved."
 echo ""
 
 # Create local-data directory if it doesn't exist
@@ -394,16 +396,18 @@ else
     echo "{}" > "$OUTPUT_JSON"
 fi
 
-# Check if RUM query actually failed (not just SQS error)
-if grep -q "Could not retrieved RUM domainkey" "$OUTPUT_TXT" || grep -q "Query '404-internal-links' failed" "$OUTPUT_TXT"; then
+# Check if RUM query actually succeeded by looking for success indicators
+# Note: "Could not retrieved RUM domainkey" errors are EXPECTED (fallback mechanism)
+# Only fail if we don't see any success indicators
+if ! grep -q "Retrieved all RUM bundles" "$OUTPUT_TXT" && ! grep -q "BROKEN INTERNAL LINKS DATA" "$OUTPUT_TXT"; then
     echo "❌ RUM API query failed - check output for errors"
     echo ""
     echo "📄 Full output: $OUTPUT_TXT"
     echo ""
     
-    # Show the RUM error
+    # Show any actual errors
     echo "Error details:"
-    grep -E "(Could not retrieved RUM domainkey|Query '404-internal-links' failed)" "$OUTPUT_TXT" | head -5
+    grep -E "(Query '404-internal-links' failed)" "$OUTPUT_TXT" | head -5
     echo ""
     echo "💡 Make sure:"
     echo "   • The base URL is correct"
@@ -413,15 +417,19 @@ if grep -q "Could not retrieved RUM domainkey" "$OUTPUT_TXT" || grep -q "Query '
     
     read -p "Open output file to see full details? (Y/n): " OPEN_FILE
     if [[ ! "$OPEN_FILE" =~ ^[Nn] ]]; then
-        if command -v code &> /dev/null; then
-            code "$OUTPUT_TXT"
-        elif command -v open &> /dev/null; then
+        if command -v open &> /dev/null; then
             open "$OUTPUT_TXT"
+        elif command -v code &> /dev/null; then
+            code "$OUTPUT_TXT"
         else
             echo "Please open: $OUTPUT_TXT"
         fi
     fi
-elif grep -q "The specified queue does not exist" "$OUTPUT_TXT"; then
+    exit 0
+fi
+
+# If we got here, the query succeeded. Check for the expected SQS error.
+if grep -q "The specified queue does not exist" "$OUTPUT_TXT"; then
     # SQS error is expected for local testing - Step 1 likely succeeded
     echo "✅ Step 1 completed (RUM data query)"
     echo "⚠️  SQS error (expected for local testing)"
