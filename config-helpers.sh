@@ -15,8 +15,7 @@ init_last_run_config() {
     "lastUseLocalUrls": false
   },
   "scraper": {
-    "lastSiteId": ""
-  },
+    "lastSiteId": ""\=  },
   "brokenLinks": {
     "lastSiteId": "",
     "lastBaseUrl": "",

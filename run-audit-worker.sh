@@ -46,6 +46,14 @@ cleanup_on_exit() {
         echo "✅ metatags-auto-suggest.js restored"
     fi
     
+    # Restore headings/handler.js if it was patched
+    if [ -f "src/headings/handler.js.backup" ]; then
+        echo ""
+        echo "🔄 Restoring headings/handler.js (cleanup)..."
+        mv src/headings/handler.js.backup src/headings/handler.js
+        echo "✅ headings/handler.js restored"
+    fi
+    
     # Clean up temporary files
     rm -f src/indexlocal.js 2>/dev/null
     rm -f template-local.yml 2>/dev/null
@@ -108,6 +116,7 @@ fi
 # Read last run values
 LAST_AUDIT_TYPE=$(read_config "audit.lastAuditType")
 LAST_SITE_ID=$(read_config "audit.lastSiteId")
+LAST_BASE_URL=$(read_config "audit.lastBaseUrl")
 LAST_USE_LOCAL=$(read_config "audit.lastUseLocalData")
 
 if [ ! -d "$AUDIT_WORKER_DIR" ]; then
@@ -213,9 +222,9 @@ echo ""
 
 # STEP 1: Prompt for Audit Type FIRST
 echo "Supported audits:"
-echo "  • broken-internal-links   • canonical          • hreflang"
-echo "  • meta-tags              • redirect-chains    • sitemap"
-echo "  • structured-data        • missing-structured-data"
+echo "  • broken-internal-links   • canonical          • headings"
+echo "  • hreflang               • meta-tags          • redirect-chains"
+echo "  • sitemap                • structured-data    • missing-structured-data"
 echo ""
 if [ -n "$LAST_AUDIT_TYPE" ]; then
     read -p "Audit type [last: $LAST_AUDIT_TYPE]: " NEW_AUDIT_TYPE
@@ -238,6 +247,7 @@ if [ "$NEW_USE_LOCAL" == "true" ]; then
             echo "   This audit may fail or encounter errors (like CSS parsing issues) when running locally."
             echo ""
             echo "   Audits that work fully offline with local scraper data:"
+            echo "     • headings ✅"
             echo "     • meta-tags ✅"
             echo "     • product-metatags"
             echo "     • structured-data"
@@ -368,7 +378,7 @@ case "$NEW_AUDIT_TYPE" in
         fi
         ;;
         
-    "structured-data")
+    "structured-data"|"headings")
         # Special case: needs BOTH top pages AND scraper data
         NEW_USE_LOCAL="true"  # Needs scraper data
         USE_LOCAL_URLS="Y"    # Also needs top pages
@@ -382,7 +392,7 @@ case "$NEW_AUDIT_TYPE" in
         echo ""
         echo "   💡 Make sure you've run:"
         echo "      1. ./get-top-pages.sh  (get URL list)"
-        echo "      2. cd $SPACECAT_SCRAPER_DIR && npm run scrape"
+        echo "      2. ./run-scraper.sh  (scrape the pages)"
         echo ""
         echo "   → Automatically set: USE_LOCAL_SCRAPER_DATA=true, USE_LOCAL_TOP_PAGES=true"
         ;;
@@ -550,19 +560,68 @@ if [[ ! "$NEW_SITE_ID" =~ $UUID_PATTERN ]]; then
     fi
 fi
 
+# ============================================================================
+# PROMPT FOR BASE URL (only for audits that use scraper data)
+# ============================================================================
+# Only prompt for base URL if the audit uses local scraper data
+# This is needed for audits like meta-tags, structured-data, headings
+if [[ "$NEW_USE_LOCAL" == "true" ]]; then
+    echo ""
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║                    BASE URL CONFIGURATION                  ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "📋 Enter the base URL for this site"
+    echo "   (e.g., https://www.example.com)"
+    echo ""
+    if [ -n "$LAST_BASE_URL" ]; then
+        echo "   Last used: $LAST_BASE_URL"
+        echo ""
+        read -p "Base URL [press ENTER to use last]: " NEW_BASE_URL
+        if [ -z "$NEW_BASE_URL" ]; then
+            NEW_BASE_URL="$LAST_BASE_URL"
+            echo "   → Using last base URL: $NEW_BASE_URL"
+        fi
+    else
+        read -p "Base URL: " NEW_BASE_URL
+    fi
+
+    # Validate base URL format
+    if [ -n "$NEW_BASE_URL" ]; then
+        if [[ ! "$NEW_BASE_URL" =~ ^https?:// ]]; then
+            echo ""
+            echo "⚠️  WARNING: Base URL should start with http:// or https://"
+            echo "   Provided: $NEW_BASE_URL"
+            echo ""
+            read -p "Continue anyway? (y/N): " CONTINUE_BAD_URL
+            if [[ ! "$CONTINUE_BAD_URL" =~ ^[Yy] ]]; then
+                echo "Cancelled. Please check the Base URL and try again."
+                exit 0
+            fi
+        fi
+    else
+        echo "⚠️  No base URL provided - will use fallback (may cause issues)"
+    fi
+else
+    # For audits that don't use scraper data, set a default base URL for the mock
+    # (won't actually be used, but prevents errors if the mock is called)
+    NEW_BASE_URL=""
+fi
+
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
 echo "Will run audit with:"
 echo "  Audit Type: $NEW_AUDIT_TYPE"
 echo "  Site ID: $NEW_SITE_ID"
+echo "  Base URL: ${NEW_BASE_URL:-<not provided>}"
 if [[ "$NEW_AUDIT_TYPE" == "canonical" ]] || [[ "$NEW_AUDIT_TYPE" == "hreflang" ]]; then
     if [[ ! "$USE_LOCAL_URLS" =~ ^[Nn] ]]; then
         echo "  URL Source: Local (local-data/urls-to-scrape.txt)"
     else
         echo "  URL Source: DynamoDB (production)"
     fi
-elif [[ "$NEW_AUDIT_TYPE" == "structured-data" ]]; then
+elif [[ "$NEW_AUDIT_TYPE" == "structured-data" ]] || [[ "$NEW_AUDIT_TYPE" == "headings" ]]; then
     echo "  URL Source: Local (local-data/urls-to-scrape.txt)"
     echo "  Scraper Data: Local"
 else
@@ -1092,6 +1151,57 @@ if (pattern.test(content)) {
     echo ""
 fi
 
+# ═══════════════════════════════════════════════════════════════
+# PATCH headings handler to skip Azure OpenAI for local testing
+# ═══════════════════════════════════════════════════════════════
+echo "🔧 Patching headings handler for local testing..."
+
+HEADINGS_HANDLER="$AUDIT_WORKER_DIR/src/headings/handler.js"
+
+if [ ! -f "$HEADINGS_HANDLER" ]; then
+    echo "⚠️  WARNING: headings/handler.js not found, skipping patch"
+else
+    # Backup the file
+    cp "$HEADINGS_HANDLER" "$HEADINGS_HANDLER.backup"
+    
+    # Patch to skip Azure OpenAI calls for local testing
+    # Replace all instances of AzureOpenAIClient.createFrom with conditional logic
+    node -e '
+const fs = require("fs");
+let content = fs.readFileSync("'"$HEADINGS_HANDLER"'", "utf8");
+
+// Pattern to find AzureOpenAIClient.createFrom(context)
+const pattern = /const azureOpenAIClient = AzureOpenAIClient\.createFrom\(context\);/g;
+
+// Count occurrences
+const matches = content.match(pattern);
+if (matches && matches.length > 0) {
+  // Replace all occurrences with conditional logic
+  content = content.replace(
+    pattern,
+    "// LOCAL TESTING: Use mock azureOpenAIClient if it exists\n" +
+    "  const azureOpenAIClient = context.azureOpenAIClient || AzureOpenAIClient.createFrom(context);\n" +
+    "  if (context.azureOpenAIClient) {\n" +
+    "    log.info(\"[LOCAL TEST MODE] Using mock Azure OpenAI client - AI suggestions disabled\");\n" +
+    "  }"
+  );
+  
+  fs.writeFileSync("'"$HEADINGS_HANDLER"'", content);
+  console.log("✅ Patched headings handler to use mock Azure OpenAI client (" + matches.length + " occurrences)");
+} else {
+  console.log("⚠️  Pattern not found - headings/handler.js may have changed");
+  console.log("   Azure OpenAI calls may fail");
+}
+'
+    
+    if [ $? -ne 0 ]; then
+        echo "❌ Error patching headings/handler.js"
+        mv "$HEADINGS_HANDLER.backup" "$HEADINGS_HANDLER" 2>/dev/null
+        exit 1
+    fi
+    echo ""
+fi
+
 # Clean up old output.txt
 if [ -f "output.txt" ]; then
     echo "🗑️  Cleaning up old output.txt..."
@@ -1176,8 +1286,8 @@ if [[ "$NEW_AUDIT_TYPE" == "canonical" ]] || [[ "$NEW_AUDIT_TYPE" == "hreflang" 
         USE_LOCAL_TOP_PAGES_VALUE="true"
         TOP_PAGES_FILE_VALUE="$SCRIPT_DIR/local-data/urls-to-scrape.txt"
     fi
-elif [[ "$NEW_AUDIT_TYPE" == "structured-data" ]]; then
-    # structured-data always needs top pages for local testing
+elif [[ "$NEW_AUDIT_TYPE" == "structured-data" ]] || [[ "$NEW_AUDIT_TYPE" == "headings" ]]; then
+    # structured-data and headings always need top pages for local testing
     USE_LOCAL_TOP_PAGES_VALUE="true"
     TOP_PAGES_FILE_VALUE="$SCRIPT_DIR/local-data/urls-to-scrape.txt"
 fi
@@ -1237,6 +1347,8 @@ echo "📝 Creating local-config.json for Lambda to read directly..."
 # This bypasses SAM's env var issues
 cat > "$AUDIT_WORKER_DIR/local-config.json" <<EOF
 {
+  "siteId": "$NEW_SITE_ID",
+  "baseUrl": "$NEW_BASE_URL",
   "USE_LOCAL_SCRAPER_DATA": $NEW_USE_LOCAL,
   "USE_LOCAL_TOP_PAGES": $USE_LOCAL_TOP_PAGES_VALUE,
   "TOP_PAGES_FILE": "$TOP_PAGES_FILE_VALUE"
@@ -1263,6 +1375,8 @@ if [ -d "$BUILD_DIR" ]; then
         # Update config to point to the local copy inside the container
         cat > "$BUILD_DIR/local-config.json" <<EOF
 {
+  "siteId": "$NEW_SITE_ID",
+  "baseUrl": "$NEW_BASE_URL",
   "USE_LOCAL_SCRAPER_DATA": $NEW_USE_LOCAL,
   "USE_LOCAL_TOP_PAGES": $USE_LOCAL_TOP_PAGES_VALUE,
   "TOP_PAGES_FILE": "./urls-to-scrape.txt"
@@ -1307,7 +1421,7 @@ echo ""
     "(\
 ^.*(getTraceId|log-wrapper\.js|xray\.js|Missing AWS Lambda trace data|aws-xray-sdk).*\
 |^\s+at (getTraceId|tracingFetch|validateCanonicalTag|validateCanonicalRecursively|validatePageHreflang|isLinkInaccessible|internalLinksAuditRunner|followAnyRedirectForUrl|processEntriesInParallel|processEntries|countRedirects|getJsonData|processRedirectsFile)\
-|^\s+at (fetchContent|checkRobotsForSitemap|getSitemapUrls|findSitemap|checkSitemap|getBaseUrlPagesFromSitemaps|fetchWithHeadFallback|checkUrl|filterValidUrls)\
+|^\s+at (fetchContent|checkRobotsForSitemap|getSitemapUrls|findSitemap|checkSitemap|getBaseUrlPagesFromSitemaps|fetchWithHeadFallback|checkUrl|filterValidUrls|validateReciprocalHreflang)\
 |^\s+at file:\/\/\/var\/task\/(src|node_modules)\/.*\.js:[0-9]+:[0-9]+\
 |^\s+at (limitConcurrencyAllSettled|limitConcurrency|async |process\.processTicksAndRejections)\
 |^\s+at (async )?RunnerAudit\.\
@@ -1377,6 +1491,11 @@ if [ -f "src/metatags/metatags-auto-suggest.js.backup" ]; then
     echo "✅ Restored metatags-auto-suggest.js to original state"
 fi
 
+if [ -f "src/headings/handler.js.backup" ]; then
+    mv src/headings/handler.js.backup src/headings/handler.js
+    echo "✅ Restored headings/handler.js to original state"
+fi
+
 echo "✅ Cleaned up temporary files"
 
 # Save settings to last-run config (for next time)
@@ -1385,6 +1504,7 @@ echo "💾 Saving your settings for next run..."
 cd "$SCRIPT_DIR"
 write_config "audit.lastAuditType" "$NEW_AUDIT_TYPE"
 write_config "audit.lastSiteId" "$NEW_SITE_ID"
+write_config "audit.lastBaseUrl" "$NEW_BASE_URL"
 write_config "audit.lastUseLocalData" "$NEW_USE_LOCAL"
 echo "✅ Settings saved to .last-run-config.json"
 

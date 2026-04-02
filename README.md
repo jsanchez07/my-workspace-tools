@@ -7,6 +7,7 @@ Quick reference for running SpaceCat audits and scraping locally.
 - **[README-AUDIT-WORKER.md](README-AUDIT-WORKER.md)** - Run audits locally
 - **[README-SCRAPER.md](README-SCRAPER.md)** - Run scraper locally  
 - **[README-TOP-200-PAGES.md](README-TOP-200-PAGES.md)** - Fetch top 200 pages
+- **[README-DETECT-CDN.md](README-DETECT-CDN.md)** - Detect CDN for customer URLs
 
 ## 🚀 Quick Commands
 
@@ -29,6 +30,7 @@ Quick reference for running SpaceCat audits and scraping locally.
 ### Utilities
 ```bash
 ./open-scrape-results.sh    # View scraped data in browser
+./detect-cdn.sh             # Detect CDN for customer URLs (see README-DETECT-CDN.md)
 ```
 
 ### File Sync (Automatic!)

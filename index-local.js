@@ -191,7 +191,15 @@ export const main = async () => {
 
           try {
             const prefix = params.Prefix || '';
-            const prefixPath = path.join(localScraperPath, prefix);
+            
+            // Strip the S3 prefix pattern (scrapes/{siteId}/) from the prefix
+            // because our local files are directly under scraper-data/{siteId}/
+            const strippedPrefix = prefix.replace(`scrapes/${messageBody.siteId}/`, '');
+            const prefixPath = path.join(localScraperPath, strippedPrefix);
+
+            console.log(`   Original prefix: ${prefix}`);
+            console.log(`   Stripped prefix: ${strippedPrefix}`);
+            console.log(`   Looking in: ${prefixPath}`);
 
             if (!fs.existsSync(prefixPath)) {
               console.log(`⚠️  [MOCK S3] Directory not found: ${prefixPath}`);
@@ -208,8 +216,11 @@ export const main = async () => {
                 if (entry.isDirectory()) {
                   walkDir(fullPath, relativePath);
                 } else {
+                  // Return the key in S3 format (with scrapes/{siteId}/ prefix)
+                  // so the audit can use it with GetObjectCommand
+                  const s3Key = path.join(prefix, relativePath);
                   files.push({
-                    Key: path.join(prefix, relativePath),
+                    Key: s3Key,
                     Size: fs.statSync(fullPath).size,
                     LastModified: fs.statSync(fullPath).mtime,
                   });
@@ -483,16 +494,7 @@ export const main = async () => {
               console.log('🔧 [MOCK DynamoDB] Opportunity.addSuggestions called');
               console.log(`   Adding ${suggestions?.length || 0} suggestions`);
               
-              // Log suggestions in a readable format
-              if (suggestions && suggestions.length > 0) {
-                console.log('\n');
-                console.log('═══════════════════════════════════════════════════════════');
-                console.log('💡 SUGGESTIONS BEING ADDED');
-                console.log('═══════════════════════════════════════════════════════════');
-                console.log(JSON.stringify(suggestions, null, 2));
-                console.log('═══════════════════════════════════════════════════════════');
-                console.log('\n');
-              }
+              // Details are already shown in the audit result JSON above, no need to repeat
               
               // Return suggestion objects with getId() and getData() methods
               // The handler needs these to build the Mystique payload
@@ -589,9 +591,11 @@ export const main = async () => {
         // we'll check if the domain matches the site's base URL.
         // If not, throw an error to trigger the fallback logic in wwwUrlResolver.
         
-        // Get the base URL from the Site mock's siteUrlMap
+        // Get the base URL using same priority as Site mock:
+        // 1. User-provided baseUrl from config
+        // 2. Known site from hardcoded map
         const siteId = localConfig.siteId || messageBody.siteId;
-        const expectedBaseUrl = siteUrlMap[siteId];
+        const expectedBaseUrl = localConfig.baseUrl || siteUrlMap[siteId];
         
         if (expectedBaseUrl) {
           // Extract domain from base URL (remove protocol)
@@ -661,6 +665,43 @@ export const main = async () => {
   }
 
   // ============================================================================
+  // MOCK AZURE OPENAI CLIENT (for headings audit)
+  // ============================================================================
+  // The headings audit uses Azure OpenAI for:
+  // - Generating suggestions for empty headings
+  // - Extracting brand guidelines from healthy pages
+  // - Detecting Table of Contents with AI
+  // We skip these features for local testing and return empty/fallback results.
+  if (!context.azureOpenAIClient) {
+    console.log('🔧 [LOCAL TEST MODE] Creating mock Azure OpenAI client');
+    context.azureOpenAIClient = {
+      fetchChatCompletion: async (prompt, options) => {
+        console.log('🔧 [MOCK AZURE OPENAI] fetchChatCompletion called');
+        console.log(`   ℹ️  AI suggestions are not available for local testing`);
+        console.log(`   ℹ️  Returning empty/fallback response`);
+        
+        // Return a minimal response structure that the audit expects
+        // The actual format varies by prompt, but generally expects JSON
+        return {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  h1: { aiSuggestion: '' },
+                  tocPresent: false,
+                  brandGuidelines: {},
+                }),
+              },
+            },
+          ],
+        };
+      },
+    };
+    
+    console.log('✅ [MOCK AZURE OPENAI] Azure OpenAI client mock installed (returns empty suggestions)');
+  }
+
+  // ============================================================================
   // MOCK SITE DATA ACCESS (fallback for audits not using local top pages)
   // ============================================================================
   if (!context.dataAccess) {
@@ -673,9 +714,19 @@ export const main = async () => {
       findById: async (siteId) => {
         console.log(`🔧 [MOCK DynamoDB] Site.findById called with siteId: ${siteId}`);
 
-        // Map known site IDs to their base URLs
-        const baseURL = siteUrlMap[siteId] || 'https://example.com';
-        console.log(`   Using base URL: ${baseURL}`);
+        // Priority order for base URL:
+        // 1. User-provided baseUrl from local-config.json (from prompt)
+        // 2. Known site from hardcoded siteUrlMap
+        // 3. Fallback to example.com
+        let baseURL = localConfig.baseUrl || siteUrlMap[siteId] || 'https://example.com';
+        
+        if (localConfig.baseUrl) {
+          console.log(`   Using base URL from config: ${baseURL}`);
+        } else if (siteUrlMap[siteId]) {
+          console.log(`   Using base URL from hardcoded map: ${baseURL}`);
+        } else {
+          console.log(`   ⚠️  Using fallback base URL: ${baseURL} (site not in map)`);
+        }
 
         return {
           getId: () => siteId,
@@ -857,16 +908,7 @@ export const main = async () => {
             console.log('🔧 [MOCK DynamoDB] Opportunity.addSuggestions called');
             console.log(`   Adding ${suggestions?.length || 0} suggestions`);
             
-            // Log suggestions in a readable format
-            if (suggestions && suggestions.length > 0) {
-              console.log('\n');
-              console.log('═══════════════════════════════════════════════════════════');
-              console.log('💡 SUGGESTIONS BEING ADDED');
-              console.log('═══════════════════════════════════════════════════════════');
-              console.log(JSON.stringify(suggestions, null, 2));
-              console.log('═══════════════════════════════════════════════════════════');
-              console.log('\n');
-            }
+            // Details are already shown in the audit result JSON above, no need to repeat
             
             // Return suggestion objects with getId() and getData() methods
             // The handler needs these to build the Mystique payload
