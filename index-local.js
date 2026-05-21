@@ -12,6 +12,7 @@
 /* eslint-disable no-console */
 
 import { GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import fs from 'fs';
 import path from 'path';
 import { main as universalMain } from './index.js';
@@ -133,37 +134,63 @@ export const main = async () => {
         }],
       },
     },
-    // Mock SQS to prevent "QueueDoesNotExist" errors for multi-step audits locally
+    // Mock SQS to prevent "QueueDoesNotExist" errors for multi-step audits locally.
+    // For guidance:broken-links, we actually forward to Localstack so Mystique can respond.
     sqs: {
       sendMessage: async (queueUrl, payload) => {
         const payloadType = payload?.type || 'unknown';
-        
+
         // Initialize counter if not exists
         if (!context._sqsMessageCounts) {
           context._sqsMessageCounts = new Map();
         }
-        
+
         const currentCount = context._sqsMessageCounts.get(payloadType) || 0;
         context._sqsMessageCounts.set(payloadType, currentCount + 1);
-        
-        // Only log detailed info for specific payload types or first occurrence
+
         if (payloadType === 'guidance:broken-links' && payload?.data) {
-          // Summary logging for broken-links (useful for debugging)
           const { brokenLinks, alternativeUrls } = payload.data;
-          console.log('🔧 [MOCK SQS] Sending broken-links to Mystique AI (suppressed for local testing)');
-          console.log(`   📊 Total broken links: ${brokenLinks?.length || 0}`);
-          console.log(`   📊 Total alternative URLs: ${alternativeUrls?.length || 0}`);
-          
+          console.log('🚀 [LOCAL SQS] Forwarding broken-links message to local Mystique via Localstack SQS...');
+          console.log(`   📊 Broken links : ${brokenLinks?.length || 0}`);
+          console.log(`   📊 Alternatives : ${alternativeUrls?.length || 0}`);
+
           if (!alternativeUrls || alternativeUrls.length === 0) {
-            console.log(`   ⚠️  NO ALTERNATIVE URLs - AI suggestions may be limited!`);
+            console.log('   ⚠️  NO ALTERNATIVE URLs — AI suggestions may be limited!');
+          }
+
+          // Localstack is reachable at host.docker.internal:4566 from inside the SAM container.
+          // On the host, it's localhost:4566. We try host.docker.internal first (Docker runtime),
+          // then fall back to localhost (non-Docker / direct node execution).
+          const LOCALSTACK_HOST = process.env.LOCALSTACK_HOST || 'host.docker.internal';
+          const LOCALSTACK_ENDPOINT = `http://${LOCALSTACK_HOST}:4566`;
+          const QUEUE_URL = `${LOCALSTACK_ENDPOINT}/000000000000/spacecat-to-mystique`;
+
+          const sqsClient = new SQSClient({
+            region: 'us-east-1',
+            endpoint: LOCALSTACK_ENDPOINT,
+            credentials: {
+              accessKeyId: 'localstack',
+              secretAccessKey: 'localstack',
+            },
+          });
+
+          try {
+            const result = await sqsClient.send(new SendMessageCommand({
+              QueueUrl: QUEUE_URL,
+              MessageBody: JSON.stringify(payload),
+            }));
+            console.log(`   ✅ Message sent to Localstack SQS (MessageId: ${result.MessageId})`);
+            return { MessageId: result.MessageId };
+          } catch (err) {
+            console.error(`   ❌ Failed to send to Localstack SQS: ${err.message}`);
+            console.error('      Is Localstack running? Start it with: cd mystique && docker-compose up localstack');
+            return { MessageId: '00000000-0000-0000-0000-000000000000' };
           }
         } else if (currentCount === 0) {
-          // First message of this type - log it
-          console.log(`🔧 [MOCK SQS] Sending ${payloadType} messages to Mystique AI (suppressed for local testing)`);
+          // First message of this type — log it, suppress subsequent ones
+          console.log(`🔧 [MOCK SQS] Suppressing ${payloadType} message (local testing)`);
         }
-        // Subsequent messages of same type are silently counted
-        
-        // Don't actually send - just return success
+
         return { MessageId: '00000000-0000-0000-0000-000000000000' };
       },
     },

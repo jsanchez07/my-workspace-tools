@@ -5,55 +5,19 @@
 # Cleanup function to restore files if script exits early
 cleanup_on_exit() {
     cd "$AUDIT_WORKER_DIR" 2>/dev/null || return
-    
+
     # Restore index-local.js to original git-tracked version
     if [ -f "src/index-local.js.original" ]; then
-        echo ""
-        echo "🔄 Restoring index-local.js to git-tracked version (cleanup)..."
         mv src/index-local.js.original src/index-local.js
-        echo "✅ index-local.js restored"
     fi
-    
-    # Restore step-audit.js if it was patched
-    if [ -f "src/common/step-audit.js.backup" ]; then
-        echo ""
-        echo "🔄 Restoring step-audit.js (cleanup)..."
-        mv src/common/step-audit.js.backup src/common/step-audit.js
-        echo "✅ step-audit.js restored"
-    fi
-    
-    # Restore audit-utils.js if it was patched
-    if [ -f "src/common/audit-utils.js.backup" ]; then
-        echo ""
-        echo "🔄 Restoring audit-utils.js (cleanup)..."
-        mv src/common/audit-utils.js.backup src/common/audit-utils.js
-        echo "✅ audit-utils.js restored"
-    fi
-    
-    # Restore getPresignedUrl.js if it was patched
-    if [ -f "src/utils/getPresignedUrl.js.backup" ]; then
-        echo ""
-        echo "🔄 Restoring getPresignedUrl.js (cleanup)..."
-        mv src/utils/getPresignedUrl.js.backup src/utils/getPresignedUrl.js
-        echo "✅ getPresignedUrl.js restored"
-    fi
-    
-    # Restore metatags-auto-suggest.js if it was patched
-    if [ -f "src/metatags/metatags-auto-suggest.js.backup" ]; then
-        echo ""
-        echo "🔄 Restoring metatags-auto-suggest.js (cleanup)..."
-        mv src/metatags/metatags-auto-suggest.js.backup src/metatags/metatags-auto-suggest.js
-        echo "✅ metatags-auto-suggest.js restored"
-    fi
-    
-    # Restore headings/handler.js if it was patched
-    if [ -f "src/headings/handler.js.backup" ]; then
-        echo ""
-        echo "🔄 Restoring headings/handler.js (cleanup)..."
-        mv src/headings/handler.js.backup src/headings/handler.js
-        echo "✅ headings/handler.js restored"
-    fi
-    
+
+    # Restore patched files
+    [ -f "src/common/step-audit.js.backup" ]            && mv src/common/step-audit.js.backup src/common/step-audit.js
+    [ -f "src/common/audit-utils.js.backup" ]           && mv src/common/audit-utils.js.backup src/common/audit-utils.js
+    [ -f "src/utils/getPresignedUrl.js.backup" ]        && mv src/utils/getPresignedUrl.js.backup src/utils/getPresignedUrl.js
+    [ -f "src/metatags/metatags-auto-suggest.js.backup" ] && mv src/metatags/metatags-auto-suggest.js.backup src/metatags/metatags-auto-suggest.js
+    [ -f "src/headings/handler.js.backup" ]             && mv src/headings/handler.js.backup src/headings/handler.js
+
     # Clean up temporary files
     rm -f src/indexlocal.js 2>/dev/null
     rm -f template-local.yml 2>/dev/null
@@ -63,6 +27,9 @@ cleanup_on_exit() {
 
 # Set trap to cleanup on exit (Ctrl+C, error, or normal exit)
 trap cleanup_on_exit EXIT INT TERM
+
+# qecho: only prints when running interactively (not from webapp)
+qecho() { [ "${SKIP_PATCH:-false}" != "true" ] && echo "$@"; }
 
 # Load configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -87,30 +54,29 @@ AUDIT_WORKER_DIR="$SPACECAT_AUDIT_WORKER_DIR"
 INDEX_LOCAL_FILE="$AUDIT_WORKER_DIR/src/index-local.js"
 
 # ============================================================================
-# BACKUP: Save original git-tracked version BEFORE syncing
+# BACKUP + SYNC: skipped when SKIP_PATCH=true (webapp already patched files)
 # ============================================================================
-echo "💾 Backing up original index-local.js from audit worker repo..."
-if [ -f "$INDEX_LOCAL_FILE" ]; then
-    cp "$INDEX_LOCAL_FILE" "$INDEX_LOCAL_FILE.original"
-    echo "✅ Saved backup of git-tracked version"
-    echo ""
-else
-    echo "⚠️  Warning: index-local.js not found in audit worker"
-    echo ""
-fi
+if [ "${SKIP_PATCH:-false}" != "true" ]; then
+    echo "💾 Backing up original index-local.js from audit worker repo..."
+    if [ -f "$INDEX_LOCAL_FILE" ]; then
+        cp "$INDEX_LOCAL_FILE" "$INDEX_LOCAL_FILE.original"
+        echo "✅ Saved backup of git-tracked version"
+        echo ""
+    else
+        echo "⚠️  Warning: index-local.js not found in audit worker"
+        echo ""
+    fi
 
-# ============================================================================
-# SYNC: Copy master index-local.js from central repo to audit worker
-# ============================================================================
-echo "🔄 Syncing index-local.js from central repo..."
-if [ -f "$SPACECAT_TOOLS_DIR/index-local.js" ]; then
-    cp "$SPACECAT_TOOLS_DIR/index-local.js" "$INDEX_LOCAL_FILE"
-    echo "✅ Synced latest index-local.js from my-workspace-tools"
-    echo ""
-else
-    echo "⚠️  Warning: $SPACECAT_TOOLS_DIR/index-local.js not found"
-    echo "   Using existing file in audit worker"
-    echo ""
+    echo "🔄 Syncing index-local.js from central repo..."
+    if [ -f "$SPACECAT_TOOLS_DIR/index-local.js" ]; then
+        cp "$SPACECAT_TOOLS_DIR/index-local.js" "$INDEX_LOCAL_FILE"
+        echo "✅ Synced latest index-local.js from my-workspace-tools"
+        echo ""
+    else
+        echo "⚠️  Warning: $SPACECAT_TOOLS_DIR/index-local.js not found"
+        echo "   Using existing file in audit worker"
+        echo ""
+    fi
 fi
 
 # Read last run values
@@ -134,46 +100,28 @@ cd "$AUDIT_WORKER_DIR" || exit 1
 
 # Check AWS credentials in current shell
 if [ -n "$AWS_PROFILE" ] || [ -n "$AWS_ACCESS_KEY_ID" ]; then
-    echo "✅ AWS credentials already loaded in your terminal:"
-    if [ -n "$AWS_PROFILE" ]; then
-        echo "   AWS_PROFILE: $AWS_PROFILE"
-    fi
-    if [ -n "$AWS_REGION" ]; then
-        echo "   AWS_REGION: $AWS_REGION"
-    fi
-    if [ -n "$DYNAMO_TABLE_NAME_DATA" ]; then
-        echo "   Table: $DYNAMO_TABLE_NAME_DATA"
-    fi
-    echo ""
+    qecho "✅ AWS credentials loaded (profile: ${AWS_PROFILE:-key-based})"
+    qecho ""
 elif [ -f "env.sh" ]; then
-    echo "📋 AWS credentials not detected in terminal"
-    echo "   Found env.sh file - you can source it"
-    echo ""
-    echo "💡 TIP: For persistent credentials, source env.sh in your terminal:"
-    echo "   cd $AUDIT_WORKER_DIR && source env.sh"
-    echo ""
-    echo "   Then credentials will persist for your entire terminal session!"
-    echo ""
-    read -p "Source env.sh now (only for this script run)? (Y/n): " SOURCE_ENV
-    if [[ ! "$SOURCE_ENV" =~ ^[Nn] ]]; then
-        echo "Loading environment variables from env.sh..."
+    if [ "${SKIP_PATCH:-false}" = "true" ]; then
         source env.sh
-        echo "✅ Environment variables loaded (for this script run only)"
-        
-        # Show key variables
-        if [ -n "$AWS_PROFILE" ]; then
-            echo "   AWS_PROFILE: $AWS_PROFILE"
-        fi
-        if [ -n "$AWS_REGION" ]; then
-            echo "   AWS_REGION: $AWS_REGION"
-        fi
-        if [ -n "$DYNAMO_TABLE_NAME_DATA" ]; then
-            echo "   Table: $DYNAMO_TABLE_NAME_DATA"
-        fi
     else
-        echo "⚠️  Skipped loading env.sh - you'll need AWS credentials another way"
+        echo "📋 AWS credentials not detected in terminal"
+        echo "   Found env.sh file - you can source it"
+        echo ""
+        echo "💡 TIP: For persistent credentials, source env.sh in your terminal:"
+        echo "   cd $AUDIT_WORKER_DIR && source env.sh"
+        echo ""
+        read -p "Source env.sh now (only for this script run)? (Y/n): " SOURCE_ENV
+        if [[ ! "$SOURCE_ENV" =~ ^[Nn] ]]; then
+            echo "Loading environment variables from env.sh..."
+            source env.sh
+            echo "✅ Environment variables loaded (for this script run only)"
+        else
+            echo "⚠️  Skipped loading env.sh - you'll need AWS credentials another way"
+        fi
+        echo ""
     fi
-    echo ""
 else
     echo "⚠️  No env.sh found - load AWS credentials (e.g., via klam) first!"
     echo ""
@@ -181,23 +129,89 @@ fi
 
 # Check if AWS credentials are available
 if [ -z "$AWS_PROFILE" ] && [ -z "$AWS_ACCESS_KEY_ID" ]; then
-    echo "⚠️  WARNING: No AWS credentials detected!"
-    echo ""
-    echo "The audit worker needs AWS credentials to access DynamoDB,"
-    echo "even when using local scraper data."
-    echo ""
-    echo "Options:"
-    echo "  1. Run: aws sso login --profile <your-profile>"
-    echo "  2. Export AWS_PROFILE=<your-profile>"
-    echo "  3. Source env.sh if you have one"
-    echo ""
-    read -p "Continue anyway? (y/N): " CONTINUE_NO_CREDS
-    if [[ ! "$CONTINUE_NO_CREDS" =~ ^[Yy] ]]; then
-        echo "Cancelled. Please set up AWS credentials first."
-        exit 0
+    qecho "⚠️  WARNING: No AWS credentials detected!"
+    qecho ""
+    if [ "${SKIP_PATCH:-false}" = "true" ]; then
+        # Non-interactive mode — continue anyway (DynamoDB is mocked for local testing)
+        :
+    else
+        echo "The audit worker needs AWS credentials to access DynamoDB,"
+        echo "even when using local scraper data."
+        echo ""
+        echo "Options:"
+        echo "  1. Run: aws sso login --profile <your-profile>"
+        echo "  2. Export AWS_PROFILE=<your-profile>"
+        echo "  3. Source env.sh if you have one"
+        echo ""
+        read -p "Continue anyway? (y/N): " CONTINUE_NO_CREDS
+        if [[ ! "$CONTINUE_NO_CREDS" =~ ^[Yy] ]]; then
+            echo "Cancelled. Please set up AWS credentials first."
+            exit 0
+        fi
+        echo ""
     fi
-    echo ""
 fi
+
+if [ "${SKIP_PATCH:-false}" = "true" ] && [ -n "$AUDIT_TYPE" ] && [ -n "$SITE_ID" ]; then
+    # ── Non-interactive mode: webapp already patched files and passed env vars ──
+    NEW_AUDIT_TYPE="$AUDIT_TYPE"
+    NEW_SITE_ID="$SITE_ID"
+    NEW_BASE_URL="${BASE_URL:-}"
+    NEW_USE_LOCAL="${USE_LOCAL:-false}"
+    USE_LOCAL_URLS=""
+
+    # Resolve AUDIT_DIR (same logic as interactive path)
+    AUDIT_DIR="$NEW_AUDIT_TYPE"
+    case "$NEW_AUDIT_TYPE" in
+        "lhs-mobile"|"lhs-desktop") AUDIT_DIR="lhs" ;;
+        "meta-tags")                AUDIT_DIR="metatags" ;;
+        "product-metatags")         AUDIT_DIR="product-metatags" ;;
+        "structured-data")          AUDIT_DIR="structured-data" ;;
+        "broken-backlinks")         AUDIT_DIR="backlinks" ;;
+        "broken-internal-links")    AUDIT_DIR="internal-links" ;;
+    esac
+
+    # Detect IS_MULTI_STEP by reading handler.js
+    HANDLER_FILE="$SPACECAT_AUDIT_WORKER_DIR/src/$AUDIT_DIR/handler.js"
+    IS_MULTI_STEP=false
+    FINAL_STEP_NAME=""
+    ALL_STEPS=""
+    if [ -f "$HANDLER_FILE" ]; then
+        AUDIT_INFO=$(node -e "
+const fs = require('fs');
+try {
+  const content = fs.readFileSync('$HANDLER_FILE', 'utf8');
+  const stepMatches = content.match(/\.addStep\(\s*'([^']+)'/g);
+  if (!stepMatches || stepMatches.length === 0) {
+    console.log('single|');
+  } else {
+    const stepNames = stepMatches.map(m => m.match(/\.addStep\(\s*'([^']+)'/)[1]);
+    console.log('multi|' + stepNames[stepNames.length - 1] + '|' + stepNames.join(','));
+  }
+} catch (e) { console.log('error|' + e.message); }
+")
+        if [ "$(echo "$AUDIT_INFO" | cut -d'|' -f1)" = "multi" ]; then
+            IS_MULTI_STEP=true
+            FINAL_STEP_NAME=$(echo "$AUDIT_INFO" | cut -d'|' -f2)
+            ALL_STEPS=$(echo "$AUDIT_INFO" | cut -d'|' -f3)
+        fi
+    fi
+
+    # Multi-step audits require local scraper data
+    if [ "$IS_MULTI_STEP" = true ]; then
+        NEW_USE_LOCAL="true"
+    fi
+
+    if [ "$IS_MULTI_STEP" = true ]; then
+        SKIP_TO_FINAL=true
+    else
+        SKIP_TO_FINAL=false
+    fi
+
+    echo "▶ $NEW_AUDIT_TYPE — $NEW_BASE_URL"
+
+else
+    # ── Interactive mode ───────────────────────────────────────────────────────
 
 # Read current configuration from index-local.js
 CURRENT_USE_LOCAL=$(grep -E "const USE_LOCAL_SCRAPER_DATA" src/index-local.js | head -1 | grep -o "true\|false" || echo "false")
@@ -262,8 +276,6 @@ if [ "$NEW_USE_LOCAL" == "true" ]; then
 fi
 
 # Dynamically detect if audit is multi-step by reading handler.js
-echo ""
-echo "🔍 Analyzing audit type: $NEW_AUDIT_TYPE..."
 
 # Convert audit type to directory name (e.g., "lhs-mobile" -> "lhs", "meta-tags" -> "metatags")
 AUDIT_DIR="$NEW_AUDIT_TYPE"
@@ -290,8 +302,6 @@ case "$NEW_AUDIT_TYPE" in
 esac
 
 # STEP 2: Detect if audit is multi-step (need this BEFORE asking about local data)
-echo ""
-echo "🔍 Analyzing audit structure..."
 
 HANDLER_FILE="$SPACECAT_AUDIT_WORKER_DIR/src/$AUDIT_DIR/handler.js"
 
@@ -644,9 +654,9 @@ if [[ "$CONFIRM" =~ ^[Nn] ]]; then
     exit 0
 fi
 
+fi # end non-interactive/interactive block
+
 # Update index-local.js with run-specific settings
-echo ""
-echo "📝 Updating index-local.js with your run settings..."
 
 # Update the file using Node.js for safe string replacement
 node -e "
@@ -785,9 +795,13 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo ""
-echo "═══════════════════════════════════════════════════════════════"
-echo ""
+qecho ""
+qecho "═══════════════════════════════════════════════════════════════"
+qecho ""
+
+if [ "${SKIP_PATCH:-false}" = "true" ]; then
+    : # webapp already patched files via patcher.js
+else
 
 # Apply patches to bypass audit enablement check (for all audits in local testing)
 echo "🔧 Patching step-audit.js to bypass audit enablement check..."
@@ -1202,36 +1216,28 @@ if (matches && matches.length > 0) {
     echo ""
 fi
 
+fi # end SKIP_PATCH block
+
 # Clean up old output.txt
 if [ -f "output.txt" ]; then
-    echo "🗑️  Cleaning up old output.txt..."
     rm output.txt
-    echo "✅ Removed old output file"
-    echo ""
 fi
 
 # Clean SAM build cache to ensure fresh build
 if [ -d ".aws-sam" ]; then
-    echo "🗑️  Cleaning SAM build cache..."
+    qecho "🗑️  Cleaning SAM build cache..."
     rm -rf .aws-sam
-    echo "✅ Removed old SAM build"
-    echo ""
+    qecho "✅ Removed old SAM build"
+    qecho ""
 fi
 
 # Copy index-local.js to indexlocal.js (hyphen-free) for SAM
-echo "📋 Creating hyphen-free copy for SAM..."
 cp src/index-local.js src/indexlocal.js
-echo "✅ Created src/indexlocal.js"
-echo ""
 
 # Create template-local.yml dynamically from template.yml
-echo "📋 Creating template-local.yml with hyphen-free handler..."
 sed 's|Handler: src/index-local\.main|Handler: src/indexlocal.main|' template.yml > template-local.yml
-echo "✅ Created template-local.yml"
-echo ""
 
 echo "🔨 Building audit worker (fresh build)..."
-echo "=================="
 sam build --template template-local.yml
 
 if [ $? -ne 0 ]; then
@@ -1241,39 +1247,25 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo ""
-echo "📂 Setting up scraper data..."
+
 # Copy scraper data into the BUILD directory so Docker can access it
 BUILD_DIR="$AUDIT_WORKER_DIR/.aws-sam/build/SpacecatAuditWorkerFunction"
 SCRAPER_SOURCE="$SPACECAT_SCRAPER_DIR/tmp/scrapes"
 SCRAPER_DEST="$BUILD_DIR/scraper-data"
 
 if [ -d "$SCRAPER_SOURCE" ]; then
-    echo "   Copying scraper data from: $SCRAPER_SOURCE"
-    echo "   Copying to BUILD directory: $SCRAPER_DEST"
     rm -rf "$SCRAPER_DEST"
     cp -r "$SCRAPER_SOURCE" "$SCRAPER_DEST"
-    echo "   ✅ Scraper data ready in build directory"
 else
-    echo "   ⚠️  WARNING: No scraper data found at $SCRAPER_SOURCE"
-    echo "   The audit will run but may fail if it needs scraper data"
+    qecho "   ⚠️  WARNING: No scraper data found at $SCRAPER_SOURCE"
 fi
 
-echo ""
-echo "📂 Setting up broken links data (for Step 2)..."
 # Copy broken-links JSON files into the BUILD directory so Docker can access them
-# This allows Step 2 of broken-internal-links to load the data from Step 1
 BROKEN_LINKS_FILES="$SPACECAT_TOOLS_DIR/local-data/broken-links-*.json"
 if ls $BROKEN_LINKS_FILES 1> /dev/null 2>&1; then
-    echo "   Found broken links JSON files in local-data/"
     cp $BROKEN_LINKS_FILES "$BUILD_DIR/" 2>/dev/null || true
-    echo "   ✅ Broken links data copied to build directory"
-else
-    echo "   ℹ️  No broken links JSON files found (run fetch-broken-links.sh first for Step 2)"
 fi
 
-echo ""
-echo "📝 Creating env.json for SAM..."
 
 # Determine if we should use local top pages based on audit type and user choice
 USE_LOCAL_TOP_PAGES_VALUE="false"
@@ -1295,6 +1287,10 @@ fi
 cat > "$AUDIT_WORKER_DIR/env.json" <<EOF
 {
   "SpacecatAuditWorkerFunction": {
+    "AUDIT_TYPE": "$NEW_AUDIT_TYPE",
+    "SITE_ID": "$NEW_SITE_ID",
+    "BASE_URL": "$NEW_BASE_URL",
+    "VAULT_SECRETS_DISABLED": "true",
     "AWS_ACCESS_KEY_ID": "$AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY": "$AWS_SECRET_ACCESS_KEY",
     "AWS_SESSION_TOKEN": "$AWS_SESSION_TOKEN",
@@ -1325,26 +1321,14 @@ cat > "$AUDIT_WORKER_DIR/env.json" <<EOF
 }
 EOF
 
-echo "✅ Created env.json with AWS credentials"
-echo ""
 
 # Validate JSON syntax
 if ! python3 -m json.tool "$AUDIT_WORKER_DIR/env.json" > /dev/null 2>&1; then
     echo "❌ ERROR: env.json has invalid JSON syntax!"
-    echo "   Please check the file manually:"
-    echo "   cat $AUDIT_WORKER_DIR/env.json"
     exit 1
 fi
 
-echo "🔍 Environment variables being passed to Lambda:"
-echo "   USE_LOCAL_SCRAPER_DATA: '$NEW_USE_LOCAL'"
-echo "   USE_LOCAL_TOP_PAGES: '$USE_LOCAL_TOP_PAGES_VALUE'"
-echo "   TOP_PAGES_FILE: '$TOP_PAGES_FILE_VALUE'"
-echo ""
-
-echo "📝 Creating local-config.json for Lambda to read directly..."
-# Create a config file that the Lambda can read from the filesystem
-# This bypasses SAM's env var issues
+# Create a config file that the Lambda can read from the filesystem (bypasses SAM's env var issues)
 cat > "$AUDIT_WORKER_DIR/local-config.json" <<EOF
 {
   "siteId": "$NEW_SITE_ID",
@@ -1355,23 +1339,23 @@ cat > "$AUDIT_WORKER_DIR/local-config.json" <<EOF
 }
 EOF
 
-echo "✅ Created local-config.json"
 
 # Copy the config file and urls-to-scrape.txt into the build directory so SAM can access them
 BUILD_DIR="$AUDIT_WORKER_DIR/.aws-sam/build/SpacecatAuditWorkerFunction"
 if [ -d "$BUILD_DIR" ]; then
     cp "$AUDIT_WORKER_DIR/local-config.json" "$BUILD_DIR/local-config.json"
-    echo "✅ Copied local-config.json to build directory"
-    
+
+    # Copy broken-backlinks-local.json if it exists
+    if [ -f "$AUDIT_WORKER_DIR/broken-backlinks-local.json" ]; then
+        cp "$AUDIT_WORKER_DIR/broken-backlinks-local.json" "$BUILD_DIR/broken-backlinks-local.json"
+    fi
+
     # Copy urls-to-scrape.txt if it exists (for audits that need top pages)
-    # Try the configured path first, then fall back to local-data/
     if [ -f "$TOP_PAGES_FILE_VALUE" ]; then
         cp "$TOP_PAGES_FILE_VALUE" "$BUILD_DIR/urls-to-scrape.txt"
-        echo "✅ Copied urls-to-scrape.txt to build directory"
     elif [ -f "$SCRIPT_DIR/local-data/urls-to-scrape.txt" ]; then
         cp "$SCRIPT_DIR/local-data/urls-to-scrape.txt" "$BUILD_DIR/urls-to-scrape.txt"
-        echo "✅ Copied urls-to-scrape.txt from local-data/ to build directory"
-        
+
         # Update config to point to the local copy inside the container
         cat > "$BUILD_DIR/local-config.json" <<EOF
 {
@@ -1382,33 +1366,19 @@ if [ -d "$BUILD_DIR" ]; then
   "TOP_PAGES_FILE": "./urls-to-scrape.txt"
 }
 EOF
-        echo "✅ Updated config to use relative path for urls-to-scrape.txt"
     else
-        echo "⚠️  WARNING: local-data/urls-to-scrape.txt not found at $TOP_PAGES_FILE_VALUE"
+        qecho "⚠️  WARNING: urls-to-scrape.txt not found at $TOP_PAGES_FILE_VALUE"
     fi
 else
     echo "⚠️  WARNING: Build directory not found, config may not be accessible"
 fi
 
-echo "📄 Config contents:"
-cat "$AUDIT_WORKER_DIR/local-config.json"
-echo ""
-
 echo "🚀 Running audit worker..."
-echo "=================="
 
 # Export all environment variables so SAM Local can pick them up
-# (using --env-vars alone doesn't always work reliably)
 export USE_LOCAL_SCRAPER_DATA="$NEW_USE_LOCAL"
 export USE_LOCAL_TOP_PAGES="$USE_LOCAL_TOP_PAGES_VALUE"
 export TOP_PAGES_FILE="$TOP_PAGES_FILE_VALUE"
-
-echo ""
-echo "   📤 Exported environment variables to shell:"
-echo "      USE_LOCAL_SCRAPER_DATA=$USE_LOCAL_SCRAPER_DATA"
-echo "      USE_LOCAL_TOP_PAGES=$USE_LOCAL_TOP_PAGES"
-echo "      TOP_PAGES_FILE=$TOP_PAGES_FILE"
-echo ""
 
 # Run SAM using the BUILT template (not source template)
 # This ensures env vars from env.json are properly applied
@@ -1417,7 +1387,7 @@ echo ""
     --template .aws-sam/build/template.yaml \
     SpacecatAuditWorkerFunction \
     --env-vars "$AUDIT_WORKER_DIR/env.json" \
-    2>&1 | grep -v -E \
+    2>&1 | grep --line-buffered -v -E \
     "(\
 ^.*(getTraceId|log-wrapper\.js|xray\.js|Missing AWS Lambda trace data|aws-xray-sdk).*\
 |^\s+at (getTraceId|tracingFetch|validateCanonicalTag|validateCanonicalRecursively|validatePageHreflang|isLinkInaccessible|internalLinksAuditRunner|followAnyRedirectForUrl|processEntriesInParallel|processEntries|countRedirects|getJsonData|processRedirectsFile)\
@@ -1429,38 +1399,26 @@ echo ""
 |^\s+at Array\.map\
 |^\s+at \/var\/task\/node_modules\/@smithy\/\
 )" \
-    > output.txt
+    | tee output.txt
 
-echo ""
-echo "✅ Audit completed! Output saved to output.txt"
 
-echo ""
-echo "=================="
-echo "✅ Audit worker execution complete!"
-echo ""
-
-# Open output file
+# Open output file (interactive mode only)
 if [ -f "output.txt" ]; then
-    echo "📄 Output saved to: output.txt"
-    echo ""
-    
-    read -p "Open output.txt? (Y/n): " OPEN_OUTPUT
-    if [[ ! "$OPEN_OUTPUT" =~ ^[Nn] ]]; then
-        echo "Opening output.txt in default editor..."
-        open output.txt
-    else
-        echo "Skipped. You can view it manually:"
-        echo "  cat $AUDIT_WORKER_DIR/output.txt"
-        echo "  or"
-        echo "  open $AUDIT_WORKER_DIR/output.txt"
+    if [ "${SKIP_PATCH:-false}" != "true" ]; then
+        echo ""
+        echo "✅ Audit worker execution complete!"
+        echo ""
+        read -p "Open output.txt? (Y/n): " OPEN_OUTPUT
+        if [[ ! "$OPEN_OUTPUT" =~ ^[Nn] ]]; then
+            echo "Opening output.txt in default editor..."
+            open output.txt
+        else
+            echo "  cat $AUDIT_WORKER_DIR/output.txt"
+        fi
     fi
-else
-    echo "⚠️  Warning: output.txt not found"
 fi
 
 # Cleanup temporary files
-echo ""
-echo "🗑️  Cleaning up temporary files..."
 rm -f src/indexlocal.js
 rm -f template-local.yml
 rm -f env.json
@@ -1473,50 +1431,39 @@ rm -rf .aws-sam/build/SpacecatAuditWorkerFunction/scraper-data 2>/dev/null
 # Restore patched files
 if [ -f "src/common/step-audit.js.backup" ]; then
     mv src/common/step-audit.js.backup src/common/step-audit.js
-    echo "✅ Restored step-audit.js to original state"
 fi
 
 if [ -f "src/common/audit-utils.js.backup" ]; then
     mv src/common/audit-utils.js.backup src/common/audit-utils.js
-    echo "✅ Restored audit-utils.js to original state"
 fi
 
 if [ -f "src/utils/getPresignedUrl.js.backup" ]; then
     mv src/utils/getPresignedUrl.js.backup src/utils/getPresignedUrl.js
-    echo "✅ Restored getPresignedUrl.js to original state"
 fi
 
 if [ -f "src/metatags/metatags-auto-suggest.js.backup" ]; then
     mv src/metatags/metatags-auto-suggest.js.backup src/metatags/metatags-auto-suggest.js
-    echo "✅ Restored metatags-auto-suggest.js to original state"
 fi
 
 if [ -f "src/headings/handler.js.backup" ]; then
     mv src/headings/handler.js.backup src/headings/handler.js
-    echo "✅ Restored headings/handler.js to original state"
 fi
 
-echo "✅ Cleaned up temporary files"
-
 # Save settings to last-run config (for next time)
-echo ""
-echo "💾 Saving your settings for next run..."
 cd "$SCRIPT_DIR"
 write_config "audit.lastAuditType" "$NEW_AUDIT_TYPE"
 write_config "audit.lastSiteId" "$NEW_SITE_ID"
 write_config "audit.lastBaseUrl" "$NEW_BASE_URL"
 write_config "audit.lastUseLocalData" "$NEW_USE_LOCAL"
-echo "✅ Settings saved to .last-run-config.json"
 
 # Always restore original git-tracked index-local.js in audit worker
 cd "$AUDIT_WORKER_DIR"
 if [ -f "src/index-local.js.original" ]; then
     mv src/index-local.js.original src/index-local.js
-    echo "✅ Restored index-local.js to original git-tracked state"
 fi
 
-echo ""
-echo "Done! 🎉"
-echo ""
-echo "💡 Your settings are remembered for next run - just press ENTER to reuse them!"
+qecho ""
+qecho "Done! 🎉"
+qecho ""
+qecho "💡 Your settings are remembered for next run - just press ENTER to reuse them!"
 

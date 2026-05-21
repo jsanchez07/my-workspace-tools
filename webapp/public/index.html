@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SpaceCat Local Dev</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ─── Topbar ──────────────────────────────────────────────────────────── -->
+  <header id="topbar">
+    <div class="logo">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+        <path d="M2 17l10 5 10-5"/>
+        <path d="M2 12l10 5 10-5"/>
+      </svg>
+      SpaceCat Local Dev
+    </div>
+    <div class="spacer"></div>
+    <div id="config-status" class="config-pill warn" title="Config status">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/>
+      </svg>
+      <span id="config-status-text">checking…</span>
+    </div>
+  </header>
+
+  <!-- ─── Sidebar ─────────────────────────────────────────────────────────── -->
+  <aside id="sidebar">
+
+    <!-- Site Config -->
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Site Config</div>
+      <div class="field">
+        <label for="inp-site-id">Site ID (UUID)</label>
+        <input id="inp-site-id" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="inp-base-url">Base URL</label>
+        <input id="inp-base-url" type="text" placeholder="https://www.example.com" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field" id="field-rum-key" style="display:none">
+        <label for="inp-rum-key">RUM Domain Key</label>
+        <input id="inp-rum-key" type="text" placeholder="rum-domain-key" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="inp-api-env">SpaceCat Environment <span style="color:var(--text-dim);font-weight:400">(selects which API key from config to use)</span></label>
+        <select id="inp-api-env">
+          <option value="stage">Stage</option>
+          <option value="prod">Prod</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- AWS Credentials -->
+    <div class="sidebar-section">
+      <div class="creds-header" onclick="toggleCredsPanel()">
+        <span class="sidebar-section-title" style="margin:0">AWS Credentials</span>
+        <span id="creds-status-badge" class="creds-badge unset">not set</span>
+        <svg id="creds-chevron" class="creds-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </div>
+      <div id="creds-panel" class="creds-panel" style="display:none">
+        <p class="creds-hint">Paste the block from <a href="https://klam.corp.adobe.com/" target="_blank" class="creds-link">klam.corp.adobe.com</a>. Accepts <code>export KEY="val"</code> or <code>KEY=val</code> format.</p>
+        <textarea id="inp-creds" rows="5" placeholder="export AWS_ACCESS_KEY_ID=&quot;ASIA...&quot;&#10;export AWS_SECRET_ACCESS_KEY=&quot;...&quot;&#10;export AWS_SESSION_TOKEN=&quot;...&quot;" autocomplete="off" spellcheck="false"></textarea>
+        <div class="creds-actions">
+          <button class="run-btn" onclick="saveCredentials()">Save</button>
+          <button class="log-action-btn" onclick="clearCredentials()">Clear</button>
+        </div>
+        <div id="creds-keys" class="creds-keys"></div>
+      </div>
+    </div>
+
+    <!-- Audit Type -->
+    <div class="sidebar-section" style="flex:1;overflow-y:auto">
+      <div class="sidebar-section-title">Audit Type</div>
+      <div class="audit-list" id="audit-list"></div>
+    </div>
+
+    <!-- Services -->
+    <div class="sidebar-section">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+        <span class="sidebar-section-title" style="margin:0">Local Services</span>
+        <button class="service-refresh" id="services-refresh" title="Refresh">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+          Refresh
+        </button>
+      </div>
+      <div class="service-list" id="service-list">
+        <div style="color:var(--text-dim);font-size:11px">Checking…</div>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- ─── Main ────────────────────────────────────────────────────────────── -->
+  <main id="main">
+    <div class="main-placeholder" id="main-placeholder">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <rect x="2" y="3" width="20" height="14" rx="2"/>
+        <path d="M8 21h8M12 17v4"/>
+        <path d="M7 8l3 3-3 3"/>
+        <path d="M13 14h4"/>
+      </svg>
+      <p>Select an audit type to get started</p>
+    </div>
+
+    <div id="audit-panel" style="display:none">
+
+      <!-- Top-level tab bar -->
+      <div class="tab-bar">
+        <button class="tab-btn active" id="tab-btn-audit" onclick="switchTab('audit')">Audit</button>
+        <button class="tab-btn" id="tab-btn-mystique" onclick="switchTab('mystique')">
+          Mystique Results
+          <span class="tab-notify" id="mystique-tab-notify"></span>
+        </button>
+      </div>
+
+      <!-- Audit tab pane (full page: header + pipeline + terminal) -->
+      <div class="tab-pane active" id="pane-audit">
+
+        <!-- Header -->
+        <div class="audit-header">
+          <h2 id="audit-title"></h2>
+          <p id="audit-desc"></p>
+        </div>
+
+        <!-- Local changes warning -->
+        <div id="local-changes-warning" class="local-changes-warning" style="display:none">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="flex-shrink:0;margin-top:1px">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <div>
+            <strong>Local changes detected</strong> — these files will be patched during the run. Your changes will be restored when the run completes.
+            <ul id="local-changes-list"></ul>
+          </div>
+        </div>
+
+        <!-- Data status bar -->
+        <div class="data-status-bar" id="data-status-bar"></div>
+
+        <!-- Pipeline -->
+        <div class="pipeline" id="pipeline"></div>
+
+        <!-- Terminal output -->
+        <div class="log-header">
+          <span class="log-title" id="log-title">Terminal output</span>
+          <span class="log-status-badge idle" id="log-status-badge"></span>
+          <div class="log-actions">
+            <button class="log-action-btn danger" id="btn-kill" style="display:none">Kill</button>
+            <button class="log-action-btn" id="btn-clear">Clear</button>
+          </div>
+        </div>
+        <div id="log-output"><div class="log-empty">No output yet — run a step above to see logs here.</div></div>
+
+      </div>
+
+      <!-- Mystique Results tab pane (full page) -->
+      <div class="tab-pane" id="pane-mystique">
+        <div class="results-header">
+          <span class="log-title">Mystique AI Results</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span id="results-mystique-status" class="results-poll-badge"></span>
+            <button class="log-action-btn" onclick="pollMystiqueNow()">Refresh</button>
+          </div>
+        </div>
+        <div id="results-audit-summary"></div>
+        <div class="results-section-header">
+          <span class="results-section-title">Mystique AI Suggestions</span>
+        </div>
+        <div id="results-mystique-content"></div>
+      </div>
+
+    </div>
+  </main>
+
+</div>
+
+<!-- Tooltip -->
+<div class="cmd-tooltip" id="cmd-tooltip">Copied to clipboard</div>
+
+<!-- URL list modal -->
+<div class="modal-backdrop" id="url-list-modal" style="display:none" onclick="closeUrlListModal(event)">
+  <div class="modal-box" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <span class="modal-title">Paste URL List</span>
+      <button class="modal-close" onclick="closeUrlListModal()">&times;</button>
+    </div>
+    <p class="modal-hint">One URL per line. This will be saved as <code>urls-to-scrape.txt</code> and used by the next steps.</p>
+    <textarea id="url-list-modal-area" class="modal-textarea" placeholder="https://www.example.com/page1&#10;https://www.example.com/page2&#10;…" spellcheck="false"></textarea>
+    <div class="modal-actions">
+      <button class="run-btn" onclick="saveTopPagesList()">Save list</button>
+      <button class="log-action-btn" onclick="closeUrlListModal()">Cancel</button>
+      <span id="url-list-modal-status" style="font-size:11px;margin-left:4px"></span>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
