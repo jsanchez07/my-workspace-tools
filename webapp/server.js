@@ -166,9 +166,39 @@ app.post('/api/run/scraper', (req, res) => {
   res.json({ jobId });
 });
 
+// ─── Localstack SQS helper ────────────────────────────────────────────────────
+
+/**
+ * Purges all messages from a Localstack SQS queue.
+ * Used before starting a broken-backlinks audit so stale results from
+ * previous runs don't appear immediately when the poller checks the queue.
+ */
+function purgeLocalstackQueue(queuePath) {
+  return new Promise((resolve) => {
+    const body = 'Action=PurgeQueue&Version=2012-11-05';
+    const options = {
+      hostname: 'localhost',
+      port: 4566,
+      path: queuePath,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': Buffer.byteLength(body),
+        Authorization: 'AWS4-HMAC-SHA256 Credential=localstack/20240101/us-east-1/sqs/aws4_request, SignedHeaders=host, Signature=localstack',
+      },
+      timeout: 3000,
+    };
+    const r = http.request(options, () => resolve());
+    r.on('error', () => resolve()); // best-effort — don't block the audit if Localstack is down
+    r.on('timeout', () => { r.destroy(); resolve(); });
+    r.write(body);
+    r.end();
+  });
+}
+
 // ─── Run: Audit ───────────────────────────────────────────────────────────────
 
-app.post('/api/run/audit', (req, res) => {
+app.post('/api/run/audit', async (req, res) => {
   const config = readSpacecatConfig();
   if (!config.configured) return res.status(400).json({ error: 'Not configured. Run setup first.' });
   if (!config.auditWorkerDir) return res.status(400).json({ error: 'Audit worker directory not configured.' });
@@ -209,6 +239,13 @@ app.post('/api/run/audit', (req, res) => {
   writeLastRun('audit.lastSiteId', siteId);
   writeLastRun('audit.lastBaseUrl', baseUrl || '');
   writeLastRun('audit.lastUseLocalData', String(useLocalScraperData));
+
+  // Purge stale Mystique results before running broken-backlinks so the poller
+  // only picks up the fresh response for this site, not leftover messages from
+  // previous runs (the queue uses VisibilityTimeout=0 so messages never expire).
+  if (auditType === 'broken-backlinks') {
+    await purgeLocalstackQueue('/000000000000/mystique-to-spacecat');
+  }
 
   // Run the audit worker shell script — non-interactively
   const jobId = startJob(
