@@ -29,7 +29,8 @@ cleanup_on_exit() {
 trap cleanup_on_exit EXIT INT TERM
 
 # qecho: only prints when running interactively (not from webapp)
-qecho() { [ "${SKIP_PATCH:-false}" != "true" ] && echo "$@"; }
+# Uses if/fi so it always returns exit code 0 regardless of SKIP_PATCH value.
+qecho() { if [ "${SKIP_PATCH:-false}" != "true" ]; then echo "$@"; fi; }
 
 # Load configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1467,3 +1468,4 @@ qecho "Done! 🎉"
 qecho ""
 qecho "💡 Your settings are remembered for next run - just press ENTER to reuse them!"
 
+exit 0
